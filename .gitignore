@@ -1,0 +1,9 @@
+build/
+*.DS_Store
+*.lib
+*.exe
+*.so
+*.log
+*.ilk
+*.pdb
+*.bin
