@@ -82,6 +82,13 @@ set(FORGE_SPIRVTOOLS
 #spirv-cross
 file(GLOB FORGE_SPIRVCROSS "${FORGE_DIR}/Common_3/ThirdParty/OpenSource/SPIRV_Cross/*.*")
 
+#rmem
+set(FORGE_RMEM
+	${FORGE_DIR}/Common_3/ThirdParty/OpenSource/rmem/src/rmem_get_module_info.cpp
+	${FORGE_DIR}/Common_3/ThirdParty/OpenSource/rmem/src/rmem_hook.cpp
+	${FORGE_DIR}/Common_3/ThirdParty/OpenSource/rmem/src/rmem_lib.cpp
+)
+
 #UI middleware
 set(FORGE_UI 
 	${FORGE_DIR}/Middleware_3/UI/AppUI.h
@@ -118,7 +125,7 @@ set(FORGE_DEFS ${FORGE_DEFS} USE_LOGGING )
 
 set(SOURCE_LIST ${FORGE_OS_INTERFACES} ${FORGE_OS_CORE} ${FORGE_OS_FILESYSTEM} ${FORGE_OS_IMAGE} ${FORGE_OS_LOGGING} ${FORGE_OS_MATH} ${FORGE_OS_MEMORYTRACKING}
 	${FORGE_OS_PROFILER} ${FORGE_RENDERER} ${FORGE_EASTL} ${FORGE_SPIRVTOOLS} ${FORGE_SPIRVCROSS} ${FORGE_BASIS_TRANSCODER} ${FORGE_ZIP} ${FORGE_TINYXML2} 
-	${FORGE_UI} ${FORGE_TEXT} ${FORGE_UI_IMGUI})
+	${FORGE_UI} ${FORGE_TEXT} ${FORGE_UI_IMGUI} ${FORGE_RMEM})
 
 #add the lib
 add_library(the-forge STATIC ${SOURCE_LIST})

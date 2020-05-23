@@ -48,7 +48,7 @@ int main(int argc, const char **argv)
 	glfwSetErrorCallback(errorCallback);
 	//init glfw
 	if (!glfwInit())
-        exit(EXIT_FAILURE);
+      exit(EXIT_FAILURE);
 
 	//we want glfw to not create any api with window creation
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
@@ -57,7 +57,7 @@ int main(int argc, const char **argv)
 	if (!pWindow)
 	{
 		glfwTerminate();
-        exit(EXIT_FAILURE);
+      exit(EXIT_FAILURE);
 	}
 
 	//Demo class
@@ -66,7 +66,7 @@ int main(int argc, const char **argv)
 	if (!demo.init(pWindow))
 	{
 		glfwTerminate();
-        exit(EXIT_FAILURE);
+      exit(EXIT_FAILURE);
 	}
 
 	//set the demo class as the user pointer
@@ -88,5 +88,5 @@ int main(int argc, const char **argv)
 	glfwDestroyWindow(pWindow);
 	glfwTerminate();
 	
-    exit(EXIT_SUCCESS);
+   exit(EXIT_SUCCESS);
 } 

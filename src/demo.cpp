@@ -65,7 +65,7 @@ Demo::~Demo()
 	}
 
 	Log::Exit();
-	fsDeinitAPI();
+   fsExitAPI();
 	MemAllocExit();
 }
 
@@ -92,14 +92,14 @@ bool Demo::init(GLFWwindow *pWindow)
 	Log::Init();
 
 	//set the root folder path
-	PathHandle programDirectory = fsCopyProgramDirectoryPath();
+	PathHandle programDirectory = fsGetApplicationDirectory();
 	if (!fsPlatformUsesBundledResources())
 	{
-		fsSetResourceDirectoryRootPath(programDirectory);
+      fsSetResourceDirRootPath(programDirectory);
 	}
 	else
 	{
-		Log::WriteRaw(LogLevel::eERROR, "We don't support bundled resources", true);
+      LOGF(LogLevel::eERROR, "We don't support bundled resources");
 		return false;
 	}
 
@@ -117,28 +117,28 @@ bool Demo::init(GLFWwindow *pWindow)
 	switch (api)
 	{
 	case RENDERER_API_D3D12:
-		fsSetRelativePathForResourceDirectory(RD_SHADER_SOURCES, "shaders/d3d12/");
-		fsSetRelativePathForResourceDirectory(RD_SHADER_BINARIES, "shaders/d3d12/binary/");
+      fsSetRelativePathForResourceDirEnum(RD_SHADER_SOURCES, "shaders/d3d12/");
+      fsSetRelativePathForResourceDirEnum(RD_SHADER_BINARIES, "shaders/d3d12/binary/");
 		break;
 	case RENDERER_API_VULKAN:
-		fsSetRelativePathForResourceDirectory(RD_SHADER_SOURCES, "shaders/vulkan/");
-		fsSetRelativePathForResourceDirectory(RD_SHADER_BINARIES, "shaders/vulkan/binary/");
+      fsSetRelativePathForResourceDirEnum(RD_SHADER_SOURCES, "shaders/vulkan/");
+      fsSetRelativePathForResourceDirEnum(RD_SHADER_BINARIES, "shaders/vulkan/binary/");
 		break;
 	default:
-		Log::WriteRaw(LogLevel::eERROR, "No support for this API", true);
+      LOGF(LogLevel::eERROR, "No support for this API");
 		return false;
 	}
 
 	//set texture dir
-	fsSetRelativePathForResourceDirectory(RD_TEXTURES, "textures/");
+	fsSetRelativePathForResourceDirEnum(RD_TEXTURES, "textures/");
 	//set font dir
-	fsSetRelativePathForResourceDirectory(RD_BUILTIN_FONTS, "fonts/");
+	fsSetRelativePathForResourceDirEnum(RD_BUILTIN_FONTS, "fonts/");
 	//set GPUCfg dir
-	fsSetRelativePathForResourceDirectory(RD_GPU_CONFIG, "gpucfg/");
+	fsSetRelativePathForResourceDirEnum(RD_GPU_CONFIG, "gpucfg/");
 	//set UI dir
-	fsSetRelativePathForResourceDirectory(RD_MIDDLEWARE_UI, "ui/");
+	fsSetRelativePathForResourceDirEnum(RD_MIDDLEWARE_UI, "ui/");
 	//set Text dir
-	fsSetRelativePathForResourceDirectory(RD_MIDDLEWARE_TEXT, "text/");
+	fsSetRelativePathForResourceDirEnum(RD_MIDDLEWARE_TEXT, "text/");
 
 	//get framebuffer size, it may be different from window size
 	glfwGetFramebufferSize(pWindow, &mFbWidth, &mFbHeight);
@@ -278,7 +278,7 @@ bool Demo::init(GLFWwindow *pWindow)
 
 	//texture
 	{
-		PathHandle path = fsCopyPathInResourceDirectory(RD_TEXTURES, "the-forge.dds");
+		PathHandle path = fsGetPathInResourceDirEnum(RD_TEXTURES, "the-forge.dds");
 		TextureLoadDesc desc = {};
 		desc.ppTexture = &mTexture;
 		desc.pFilePath = path;

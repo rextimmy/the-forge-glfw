@@ -31,92 +31,84 @@
 #include "Common_3/OS./Interfaces/ILog.h"
 #include "Common_3/OS/Interfaces/IMemory.h"
 
-void outputLogString(const char* pszStr)
-{
-	OutputDebugStringA(pszStr);
-	OutputDebugStringA("\n");
-}
-
 void _OutputDebugStringV(const char* str, va_list args)
 {
-#ifdef _DEBUG
-    const unsigned BUFFER_SIZE = 4096;
-    char           buf[BUFFER_SIZE];
+#if FORGE_DEBUG
+   const unsigned BUFFER_SIZE = 4096;
+   char           buf[BUFFER_SIZE];
 
-    vsprintf_s(buf, BUFFER_SIZE, str, args);
-
-	OutputDebugStringA(buf);
-	OutputDebugStringA("\n");
+   vsprintf_s(buf, BUFFER_SIZE, str, args);
+   OutputDebugStringA(buf);
 #endif
 }
 
 void _OutputDebugString(const char* str, ...)
 {
-	va_list arglist;
-	va_start(arglist, str);
-	_OutputDebugStringV(str, arglist);
-	va_end(arglist);
+#if FORGE_DEBUG
+   va_list arglist;
+   va_start(arglist, str);
+   _OutputDebugStringV(str, arglist);
+   va_end(arglist);
+#endif
 }
 
 void _FailedAssert(const char* file, int line, const char* statement)
 {
-	static bool debug = true;
+   static bool debug = true;
 
-	if (debug)
-	{
-		WCHAR str[1024];
-		WCHAR message[1024];
-		WCHAR wfile[1024];
-		mbstowcs(message, statement, 1024);
-		mbstowcs(wfile, file, 1024);
-		wsprintfW(str, L"Failed: (%s)\n\nFile: %s\nLine: %d\n\n", message, wfile, line);
+   if (debug)
+   {
+      WCHAR str[1024];
+      WCHAR message[1024];
+      WCHAR wfile[1024];
+      mbstowcs(message, statement, 1024);
+      mbstowcs(wfile, file, 1024);
+      wsprintfW(str, L"Failed: (%s)\n\nFile: %s\nLine: %d\n\n", message, wfile, line);
 
-		if (IsDebuggerPresent())
-		{
-			wcscat(str, L"Debug?");
-			int res = MessageBoxW(nullptr, str, L"Assert failed", MB_YESNOCANCEL | MB_ICONERROR);
-			if (res == IDYES)
-			{
+      if (IsDebuggerPresent())
+      {
+         wcscat(str, L"Debug?");
+         int res = MessageBoxW(NULL, str, L"Assert failed", MB_YESNOCANCEL | MB_ICONERROR);
+         if (res == IDYES)
+         {
 #if _MSC_VER >= 1400
-				__debugbreak();
+            __debugbreak();
 #else
-				_asm int 0x03;  
+            _asm int 0x03;
 #endif
-			}
-			else if (res == IDCANCEL)
-			{
-				debug = false;
-			}
-		}
-		else
-		{
-			wcscat(str, L"Display more asserts?");
-			if (MessageBoxW(nullptr, str, L"Assert failed", MB_YESNO | MB_ICONERROR | MB_DEFBUTTON2) != IDYES)
-			{
-				debug = false;
-			}
-		}
-	}
+         }
+         else if (res == IDCANCEL)
+         {
+            debug = false;
+      }
+   }
+      else
+      {
+         wcscat(str, L"Display more asserts?");
+         if (MessageBoxW(NULL, str, L"Assert failed", MB_YESNO | MB_ICONERROR | MB_DEFBUTTON2) != IDYES)
+         {
+            debug = false;
+         }
+      }
+}
 }
 
-void _PrintUnicode(const eastl::string& str, bool error)
+void _PrintUnicode(const char* str, bool error)
 {
-	// If the output stream has been redirected, use fprintf instead of WriteConsoleW,
-	// though it means that proper Unicode output will not work
-	FILE* out = error ? stderr : stdout;
-	if (!_isatty(_fileno(out)))
-		fprintf(out, "%s\n", str.c_str());
-	else
-	{
-		if (error)
-			printf("%s\n", str.c_str());    // use this for now because WriteCosnoleW sometimes cause blocking
-		else
-			printf("%s\n", str.c_str());
-	}
+   // If the output stream has been redirected, use fprintf instead of WriteConsoleW,
+   // though it means that proper Unicode output will not work
+   FILE* out = error ? stderr : stdout;
+   if (!_isatty(_fileno(out)))
+      fprintf(out, "%s", str);
+   else
+   {
+      if (error)
+         printf("%s", str);    // use this for now because WriteCosnoleW sometimes cause blocking
+      else
+         printf("%s", str);
+   }
 
-	outputLogString(str.c_str());
+   _OutputDebugString(str);
 }
-
-void _PrintUnicodeLine(const eastl::string& str, bool error) { _PrintUnicode(str, error); }
 
 #endif
