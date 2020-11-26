@@ -15,6 +15,8 @@
 #define NOMINMAX
 #include <Windows.h>
 
+#include "../../../../../OS/Interfaces/IFileSystem.h"
+
 
 eastl::string ReadFile(const char* fileName)
 {
@@ -163,6 +165,8 @@ int ParserMain( int argc, char* argv[] )
 
 	eastl::vector < BindingShift > bindingShift;
 
+	bool useArgumentBuffers = false;
+
 	int i = 1;
 	while (i < argc)
 	{
@@ -293,6 +297,10 @@ int ParserMain( int argc, char* argv[] )
 				break;
 			}
 		}
+		else if (String_Equal(argv[i], "-useargbuffers"))
+		{
+			useArgumentBuffers = true;
+		}
 		else
 		{
 			if (!srcFile) srcFile = argv[i];
@@ -330,7 +338,7 @@ int ParserMain( int argc, char* argv[] )
 	options.mOperation = Parser::Operation_Generate;
 	options.mTarget = target;
 	options.mShiftVec = bindingShift;
-
+	options.mUseArgumentBuffers = useArgumentBuffers;
 
 	eastl::vector < eastl::string > macroLhs{"UPDATE_FREQ_NONE", "UPDATE_FREQ_PER_FRAME", "UPDATE_FREQ_PER_BATCH", "UPDATE_FREQ_PER_DRAW"};
 	eastl::vector < eastl::string > macroRhs{"space0", "space1", "space2", "space3"};
@@ -343,14 +351,22 @@ int ParserMain( int argc, char* argv[] )
 
 int main(int argc, char** argv)
 {
-	extern bool MemAllocInit();
+	extern bool MemAllocInit(const char*);
 	extern void MemAllocExit();
 
-	if (!MemAllocInit())
+	if (!MemAllocInit("HLSLParser"))
 		return EXIT_FAILURE;
+
+	FileSystemInitDesc fsDesc = {};
+	fsDesc.pAppName = "HLSLParser";
+	if (!initFileSystem(&fsDesc))
+		return EXIT_FAILURE;
+
+	fsSetPathForResourceDir(pSystemFileIO, RM_DEBUG, RD_LOG, "");
 
 	int ret = ParserMain(argc, argv);
 
+	exitFileSystem();
 	MemAllocExit();
 
 	return ret;

@@ -124,7 +124,7 @@ class ImguiGUIDriver: public GUIDriver
 	bool init(Renderer* pRenderer, uint32_t const maxDynamicUIUpdatesPerBatch);
 	void exit();
 
-	bool load(RenderTarget** ppRts, uint32_t count);
+	bool load(RenderTarget** ppRts, uint32_t count, PipelineCache* pCache);
 	void unload();
 
 	bool addFont(void* pFontBuffer, uint32_t fontBufferSize, void* pFontGlyphRanges, float fontSize, uintptr_t* pFont);
@@ -154,12 +154,32 @@ class ImguiGUIDriver: public GUIDriver
 		case InputBindings::BUTTON_L2: mNavInputs[ImGuiNavInput_TweakSlow] = (float)press; break;
 		case InputBindings::BUTTON_R2: mNavInputs[ImGuiNavInput_TweakFast] = (float)press; break;
 		case InputBindings::BUTTON_R3: if (!press) { mActive = !mActive; } break;
-		case InputBindings::BUTTON_BACK: io.KeysDown[InputBindings::BUTTON_BACK] = press; break;
+		case InputBindings::BUTTON_KEYSHIFTL:
+		case InputBindings::BUTTON_KEYSHIFTR: 
+			io.KeyShift = press; 
+			break;
 		case InputBindings::BUTTON_SOUTH:
+		case InputBindings::BUTTON_MOUSE_RIGHT:
+		case InputBindings::BUTTON_MOUSE_MIDDLE:
+		case InputBindings::BUTTON_MOUSE_SCROLL_UP:
+		case InputBindings::BUTTON_MOUSE_SCROLL_DOWN:
 		{
+			const float scrollScale = 0.25f; // This should maybe be customized by client?  1.f would scroll ~5 lines of txt according to ImGui doc.
 			mNavInputs[ImGuiNavInput_Activate] = (float)press;
 			if (pMovePosition)
-				io.MouseDown[0] = press;
+			{
+				if (InputBindings::BUTTON_SOUTH == button)
+					io.MouseDown[0] = press;
+				else if (InputBindings::BUTTON_MOUSE_RIGHT == button)
+					io.MouseDown[1] = press;
+				else if (InputBindings::BUTTON_MOUSE_MIDDLE == button)
+					io.MouseDown[2] = press;
+				else if (InputBindings::BUTTON_MOUSE_SCROLL_UP == button)
+					io.MouseWheel = 1.f * scrollScale;
+				else if(InputBindings::BUTTON_MOUSE_SCROLL_DOWN == button)
+					io.MouseWheel = -1.f * scrollScale;
+
+			}
 			if (!mActive)
 				return true;
 			if (io.MousePos.x != -FLT_MAX && io.MousePos.y != -FLT_MAX)
@@ -181,6 +201,41 @@ class ImguiGUIDriver: public GUIDriver
 			}
 			
 		}
+
+		// Note that for keyboard keys, we only set them to true here if they are pressed because we may have a press/release
+		// happening in one frame and it would never get registered.  Instead, unpressed are deferred at the end of update().
+		// This scenario occurs with mobile soft (on-screen) keyboards.
+		case InputBindings::BUTTON_BACK: 
+			if (press)
+				io.KeysDown[InputBindings::BUTTON_BACK] = true; 
+			mPostUpdateKeyDownStates[InputBindings::BUTTON_BACK] = press;
+			break;
+		case InputBindings::BUTTON_KEYLEFT: 
+			if (press)
+				io.KeysDown[InputBindings::BUTTON_KEYLEFT] = true; 
+			mPostUpdateKeyDownStates[InputBindings::BUTTON_KEYLEFT] = press;
+			break;
+		case InputBindings::BUTTON_KEYRIGHT: 
+			if (press)
+				io.KeysDown[InputBindings::BUTTON_KEYRIGHT] = true;
+			mPostUpdateKeyDownStates[InputBindings::BUTTON_KEYRIGHT] = press;
+			break;
+		case InputBindings::BUTTON_KEYHOME:
+			if (press)
+				io.KeysDown[InputBindings::BUTTON_KEYHOME] = true;
+			mPostUpdateKeyDownStates[InputBindings::BUTTON_KEYHOME] = press;
+			break;
+		case InputBindings::BUTTON_KEYEND: 
+			if (press)
+				io.KeysDown[InputBindings::BUTTON_KEYEND] = true;
+			mPostUpdateKeyDownStates[InputBindings::BUTTON_KEYEND] = press;
+			break;
+		case InputBindings::BUTTON_KEYDELETE: 
+			if (press)
+				io.KeysDown[InputBindings::BUTTON_KEYDELETE] = true;
+			mPostUpdateKeyDownStates[InputBindings::BUTTON_KEYDELETE] = press;
+			break;
+
 		default:
 			break;
 		}
@@ -232,9 +287,9 @@ class ImguiGUIDriver: public GUIDriver
 		mCustomShader = true;
 	}
 
-	static void* alloc_func(size_t size, void* user_data) { return conf_malloc(size); }
+	static void* alloc_func(size_t size, void* user_data) { return tf_malloc(size); }
 
-	static void dealloc_func(void* ptr, void* user_data) { conf_free(ptr); }
+	static void dealloc_func(void* ptr, void* user_data) { tf_free(ptr); }
 
 	protected:
 	static const uint32_t MAX_FRAMES = 3;
@@ -264,6 +319,7 @@ class ImguiGUIDriver: public GUIDriver
 	float2           mLastUpdateMax[64] = {};
 	bool             mActive;
 	bool             mCustomShader;
+	bool             mPostUpdateKeyDownStates[512];
 };
 
 static const uint64_t VERTEX_BUFFER_SIZE = 1024 * 64 * sizeof(ImDrawVert);
@@ -271,13 +327,13 @@ static const uint64_t INDEX_BUFFER_SIZE = 128 * 1024 * sizeof(ImDrawIdx);
 
 void initGUIDriver(Renderer* pRenderer, GUIDriver** ppDriver)
 {
-	ImguiGUIDriver* pDriver = conf_new(ImguiGUIDriver);
+	ImguiGUIDriver* pDriver = tf_new(ImguiGUIDriver);
 	*ppDriver = pDriver;
 }
 
 void removeGUIDriver(GUIDriver* pDriver)
 {
-	conf_delete(pDriver);
+	tf_delete(pDriver);
 }
 
 static float4 ToFloat4Color(uint color)
@@ -296,26 +352,39 @@ static uint ToUintColor(float4 color)
 	return c;
 }
 
-void IWidget::ProcessCallbacks()
+void IWidget::ProcessCallbacks(bool deferred)
 {
-  mHovered = ImGui::IsItemHovered();
+	if (!deferred)
+	{
+		mHovered = ImGui::IsItemHovered();
+		mActive = ImGui::IsItemActive();
+		mFocused = ImGui::IsItemFocused();
+		mEdited = ImGui::IsItemEdited();
+		mDeactivated = ImGui::IsItemDeactivated();
+		mDeactivatedAfterEdit = ImGui::IsItemDeactivatedAfterEdit();
+	}
+
+	if (mDeferred != deferred)
+	{
+		return;
+	}
   
   if (pOnHover && mHovered) 
     pOnHover();
   
-	if (pOnActive && ImGui::IsItemActive())
+	if (pOnActive && mActive)
 		pOnActive();
 
-	if (pOnFocus && ImGui::IsItemFocused())
+	if (pOnFocus && mFocused)
 		pOnFocus();
 
-	if (pOnEdited && ImGui::IsItemEdited())
+	if (pOnEdited && mEdited)
 		pOnEdited();
 
-	if (pOnDeactivated && ImGui::IsItemDeactivated())
+	if (pOnDeactivated && mDeactivated)
 		pOnDeactivated();
 
-	if (pOnDeactivatedAfterEdit && ImGui::IsItemDeactivatedAfterEdit())
+	if (pOnDeactivatedAfterEdit && mDeactivatedAfterEdit)
 		pOnDeactivatedAfterEdit();
 }
 
@@ -701,6 +770,9 @@ static void SetDefaultStyle()
 	colors[ImGuiCol_DragDropTarget] = float4(1.00f, 1.00f, 0.00f, 0.90f);
 	colors[ImGuiCol_NavHighlight] = float4(0.60f, 0.60f, 0.60f, 1.00f);
 	colors[ImGuiCol_NavWindowingHighlight] = float4(1.00f, 1.00f, 1.00f, 0.70f);
+
+	const float2 dpiScale = getDpiScale();
+	style.ScaleAllSizes(min(dpiScale.x, dpiScale.y));
 }
 
 bool ImguiGUIDriver::init(Renderer* renderer, uint32_t const maxDynamicUIUpdatesPerBatch)
@@ -709,6 +781,7 @@ bool ImguiGUIDriver::init(Renderer* renderer, uint32_t const maxDynamicUIUpdates
 	pRenderer = renderer;
 	mMaxDynamicUIUpdatesPerBatch = maxDynamicUIUpdatesPerBatch;
 	mActive = true;
+	memset(mPostUpdateKeyDownStates, false, sizeof(mPostUpdateKeyDownStates));
 	/************************************************************************/
 	// Rendering resources
 	/************************************************************************/
@@ -734,8 +807,8 @@ bool ImguiGUIDriver::init(Renderer* renderer, uint32_t const maxDynamicUIUpdates
 		addShaderBinary(pRenderer, &binaryShaderDesc, &pShaderTextured);
 #else
 		ShaderLoadDesc texturedShaderDesc = {};
-		texturedShaderDesc.mStages[0] = { "imgui.vert", NULL, 0, RD_MIDDLEWARE_UI };
-		texturedShaderDesc.mStages[1] = { "imgui.frag", NULL, 0, RD_MIDDLEWARE_UI };
+		texturedShaderDesc.mStages[0] = { "imgui.vert", NULL, 0, NULL };
+		texturedShaderDesc.mStages[1] = { "imgui.frag", NULL, 0, NULL };
 		addShader(pRenderer, &texturedShaderDesc, &pShaderTextured);
 #endif
 	}
@@ -756,25 +829,25 @@ bool ImguiGUIDriver::init(Renderer* renderer, uint32_t const maxDynamicUIUpdates
 	vbDesc.mDesc.mDescriptors = DESCRIPTOR_TYPE_VERTEX_BUFFER;
 	vbDesc.mDesc.mMemoryUsage = RESOURCE_MEMORY_USAGE_CPU_TO_GPU;
 	vbDesc.mDesc.mSize = VERTEX_BUFFER_SIZE * MAX_FRAMES;
-	vbDesc.mDesc.mFlags = BUFFER_CREATION_FLAG_PERSISTENT_MAP_BIT | BUFFER_CREATION_FLAG_OWN_MEMORY_BIT;
+	vbDesc.mDesc.mFlags = BUFFER_CREATION_FLAG_PERSISTENT_MAP_BIT;
 	vbDesc.ppBuffer = &pVertexBuffer;
-	addResource(&vbDesc, NULL, LOAD_PRIORITY_NORMAL);
+	addResource(&vbDesc, NULL);
 
 	BufferLoadDesc ibDesc = vbDesc;
 	ibDesc.mDesc.mDescriptors = DESCRIPTOR_TYPE_INDEX_BUFFER;
 	ibDesc.mDesc.mSize = INDEX_BUFFER_SIZE * MAX_FRAMES;
 	ibDesc.ppBuffer = &pIndexBuffer;
-	addResource(&ibDesc, NULL, LOAD_PRIORITY_NORMAL);
+	addResource(&ibDesc, NULL);
 
 	BufferLoadDesc ubDesc = {};
 	ubDesc.mDesc.mDescriptors = DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 	ubDesc.mDesc.mMemoryUsage = RESOURCE_MEMORY_USAGE_CPU_TO_GPU;
-	ubDesc.mDesc.mFlags = BUFFER_CREATION_FLAG_PERSISTENT_MAP_BIT | BUFFER_CREATION_FLAG_OWN_MEMORY_BIT;
+	ubDesc.mDesc.mFlags = BUFFER_CREATION_FLAG_PERSISTENT_MAP_BIT;
 	ubDesc.mDesc.mSize = sizeof(mat4);
 	for (uint32_t i = 0; i < MAX_FRAMES; ++i)
 	{
 		ubDesc.ppBuffer = &pUniformBuffer[i];
-		addResource(&ubDesc, NULL, LOAD_PRIORITY_NORMAL);
+		addResource(&ubDesc, NULL);
 	}
 
 	mVertexLayoutTextured.mAttribCount = 3;
@@ -809,6 +882,11 @@ bool ImguiGUIDriver::init(Renderer* renderer, uint32_t const maxDynamicUIUpdates
 	io.NavActive = true;
 	io.WantCaptureMouse = false;
 	io.KeyMap[ImGuiKey_Backspace] = InputBindings::BUTTON_BACK;
+	io.KeyMap[ImGuiKey_LeftArrow] = InputBindings::BUTTON_KEYLEFT;
+	io.KeyMap[ImGuiKey_RightArrow] = InputBindings::BUTTON_KEYRIGHT;
+	io.KeyMap[ImGuiKey_Home] = InputBindings::BUTTON_KEYHOME;
+	io.KeyMap[ImGuiKey_End] = InputBindings::BUTTON_KEYEND;
+	io.KeyMap[ImGuiKey_Delete] = InputBindings::BUTTON_KEYDELETE;
 
 	for (uint32_t i = 0; i < MAX_FRAMES; ++i)
 	{
@@ -845,7 +923,7 @@ void ImguiGUIDriver::exit()
 bool ImguiGUIDriver::addFont(void* pFontBuffer, uint32_t fontBufferSize, void* pFontGlyphRanges, float fontSize, uintptr_t* pFont)
 {
 	// Build and load the texture atlas into a texture
-	int            width, height;
+	int            width, height, bytesPerPixel;
 	unsigned char* pixels = NULL;
 	ImGuiIO& io = ImGui::GetIO();
 
@@ -865,21 +943,39 @@ bool ImguiGUIDriver::addFont(void* pFontBuffer, uint32_t fontBufferSize, void* p
 	}
 
 	io.Fonts->Build();
-	io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+	io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height, &bytesPerPixel);
 
 	// At this point you've got the texture data and you need to upload that your your graphic system:
 	// After we have created the texture, store its pointer/identifier (_in whichever format your engine uses_) in 'io.Fonts->TexID'.
 	// This will be passed back to your via the renderer. Basically ImTextureID == void*. Read FAQ below for details about ImTextureID.
 	Texture* pTexture = NULL;
-	RawImageData    rawData = { pixels, TinyImageFormat_R8G8B8A8_UNORM, (uint32_t)width, (uint32_t)height, 1, 1, 1 };
 	SyncToken token = {};
 	TextureLoadDesc loadDesc = {};
-	loadDesc.pRawImageData = &rawData;
+	TextureDesc textureDesc = {};
+	textureDesc.mArraySize = 1;
+	textureDesc.mDepth = 1;
+	textureDesc.mDescriptors = DESCRIPTOR_TYPE_TEXTURE;
+	textureDesc.mFormat = TinyImageFormat_R8G8B8A8_UNORM;
+	textureDesc.mHeight = height;
+	textureDesc.mMipLevels = 1;
+	textureDesc.mSampleCount = SAMPLE_COUNT_1;
+	textureDesc.mStartState = RESOURCE_STATE_COMMON;
+	textureDesc.mWidth = width;
+	textureDesc.pName = "ImGui Font Texture";
+	loadDesc.pDesc = &textureDesc;
 	loadDesc.ppTexture = &pTexture;
-	loadDesc.mCreationFlag = TEXTURE_CREATION_FLAG_OWN_MEMORY_BIT;
-	addResource(&loadDesc, &token, LOAD_PRIORITY_HIGH);
-
+	addResource(&loadDesc, &token);
 	waitForToken(&token);
+
+	TextureUpdateDesc updateDesc = { pTexture };
+	beginUpdateResource(&updateDesc);
+	for (uint32_t r = 0; r < updateDesc.mRowCount; ++r)
+	{
+		memcpy(updateDesc.pMappedData + r * updateDesc.mDstRowStride,
+			pixels + r * updateDesc.mSrcRowStride, updateDesc.mSrcRowStride);
+	}
+	endUpdateResource(&updateDesc, &token);
+
 	mFontTextures.emplace_back(pTexture);
 	io.Fonts->TexID = (void*)(mFontTextures.size() - 1);
 
@@ -891,7 +987,7 @@ bool ImguiGUIDriver::addFont(void* pFontBuffer, uint32_t fontBufferSize, void* p
 	return true;
 }
 
-bool ImguiGUIDriver::load(RenderTarget** ppRts, uint32_t count)
+bool ImguiGUIDriver::load(RenderTarget** ppRts, uint32_t count, PipelineCache* pCache)
 {
 	UNREF_PARAM(count);
 
@@ -913,6 +1009,7 @@ bool ImguiGUIDriver::load(RenderTarget** ppRts, uint32_t count)
 	rasterizerStateDesc.mScissor = true;
 	
 	PipelineDesc desc = {};
+	desc.pCache = pCache;
 	desc.mType = PIPELINE_TYPE_GRAPHICS;
 	GraphicsPipelineDesc& pipelineDesc = desc.mGraphicsDesc;
 	pipelineDesc.mDepthStencilFormat = TinyImageFormat_UNDEFINED;
@@ -1046,16 +1143,20 @@ bool ImguiGUIDriver::update(GUIUpdate* pGuiUpdate)
 					overridePos = true;
 
 				ImGui::SetWindowSize(
-					float2(windowRect.z * dpiScale.x, windowRect.w * dpiScale.y), overrideSize ? ImGuiCond_Always : ImGuiCond_Once);
+					float2(windowRect.z, windowRect.w), overrideSize ? ImGuiCond_Always : ImGuiCond_Once);
 				ImGui::SetWindowPos(
-					float2(windowRect.x * dpiScale.x, windowRect.y * dpiScale.y), overridePos ? ImGuiCond_Always : ImGuiCond_Once);
-#if defined(TARGET_IOS) || defined(__ANDROID__)
-				ImGui::SetWindowCollapsed(true, ImGuiCond_Once);
-#endif
+					float2(windowRect.x, windowRect.y), overridePos ? ImGuiCond_Always : ImGuiCond_Once);
+
+				if (guiComponentFlags & GUI_COMPONENT_FLAGS_START_COLLAPSED)
+					ImGui::SetWindowCollapsed(true, ImGuiCond_Once);
 
 				for (uint32_t i = 0; i < propCount; ++i)
-					if (pProps[i])
+				{
+					if (pProps[i] != nullptr)
+					{
 						pProps[i]->Draw();
+					}
+				}
 
 				ret = ret || ImGui::GetIO().WantCaptureMouse;
 			}
@@ -1076,6 +1177,24 @@ bool ImguiGUIDriver::update(GUIUpdate* pGuiUpdate)
 		}
 	}
 	ImGui::EndFrame();
+
+	if (mActive)
+	{
+		for (uint32_t compIndex = 0; compIndex < pGuiUpdate->componentCount; ++compIndex)
+		{
+			GuiComponent*                           pComponent = pGuiUpdate->pGuiComponents[compIndex];
+			IWidget**                               pProps = pComponent->mWidgets.data();
+			uint32_t                                propCount = (uint32_t)pComponent->mWidgets.size();
+
+			for (uint32_t i = 0; i < propCount; ++i)
+			{
+				if (pProps[i] != nullptr)
+				{
+					pProps[i]->ProcessCallbacks(true);
+				}
+			}
+		}
+	}
 		
 	if (!io.MouseDown[0])
 	{
@@ -1083,6 +1202,9 @@ bool ImguiGUIDriver::update(GUIUpdate* pGuiUpdate)
 	}
 
 	mHandledGestures = false;
+
+	// Apply post update keydown states
+	memcpy(io.KeysDown, mPostUpdateKeyDownStates, sizeof(io.KeysDown));
 
 	return ret;
 }

@@ -55,19 +55,23 @@ set(DEMO_INCLUDES
 
 #Libs - all platforms
 set(DEMO_LIBS glfw the-forge)
-#Libs - apple
+#Libs - windows
 if(WIN32)
-	set(DEMO_LIBS ${DEMO_LIBS} Winmm.lib)
+	set(DEMO_LIBS ${DEMO_LIBS} Winmm.lib
+		${DEMO_DIR}/external/the-forge/Common_3/ThirdParty/OpenSource/ags/ags_lib/lib/amd_ags_x64.lib
+		${DEMO_DIR}/external/the-forge/Common_3/ThirdParty/OpenSource/nvapi/amd64/nvapi64.lib )
 endif()
 
-#Gfx libs/includes
+#Vulkan libs/includes
 if (VULKAN)
 	set(DEMO_INCLUDES ${DEMO_INCLUDES} ${Vulkan_INCLUDE_DIRS})
 endif()
 
 #D3D12 libs/includes
 if(D3D12)
-   set(DEMO_LIBS ${DEMO_LIBS} ${DEMO_DIR}/external/the-forge/Common_3/ThirdParty/OpenSource/winpixeventruntime/bin/WinPixEventRuntime.lib)
+	set(DEMO_LIBS ${DEMO_LIBS} 
+	${DEMO_DIR}/external/the-forge/Common_3/ThirdParty/OpenSource/winpixeventruntime/bin/WinPixEventRuntime.lib	
+	${DEMO_DIR}/external/the-forge/Common_3/ThirdParty/OpenSource/DirectXShaderCompiler/lib/x64/dxcompiler.lib)
 endif()
 
 #set all source code

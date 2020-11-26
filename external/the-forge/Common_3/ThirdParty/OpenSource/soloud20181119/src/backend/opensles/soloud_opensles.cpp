@@ -78,6 +78,8 @@ namespace SoLoud
 				Thread::sleep(10);
 			}
 
+			Thread::release(mAudioThread);
+
 			if(playerObj)
 			{
 				(*playerObj)->Destroy(playerObj);
@@ -95,7 +97,7 @@ namespace SoLoud
 
 			for(int idx = 0; idx < NUM_BUFFERS; ++idx)
 			{
-				conf_free(outputBuffers[idx]);
+				tf_free(outputBuffers[idx]);
 			}
 		}
 
@@ -123,6 +125,7 @@ namespace SoLoud
 		int buffersQueued;
 		int activeBuffer;
 		volatile int threadrun;
+		ThreadHandle mAudioThread;
 
 		SLDataLocator_AndroidSimpleBufferQueue inLocator;
 	};
@@ -130,7 +133,7 @@ namespace SoLoud
  	void soloud_opensles_deinit(SoLoud::Soloud *aSoloud)
 	{
 		BackendData *data = static_cast<BackendData*>(aSoloud->mBackendData);
-		conf_delete(data);
+		tf_delete(data);
 		aSoloud->mBackendData = NULL;
 	}
 
@@ -181,7 +184,7 @@ namespace SoLoud
 
 	result opensles_init(SoLoud::Soloud *aSoloud, unsigned int aFlags, unsigned int aSamplerate, unsigned int aBuffer, unsigned int aChannels)
 	{
-		BackendData *data = conf_new(BackendData);
+		BackendData *data = tf_new(BackendData);
 
 		// Allocate output buffer to mix into.
 		data->bufferSize = aBuffer;
@@ -189,7 +192,7 @@ namespace SoLoud
 		const int bufferSizeBytes = data->bufferSize * data->channels * sizeof(short);
 		for(int idx = 0; idx < NUM_BUFFERS; ++idx)
 		{
-			data->outputBuffers[idx] = (short*)conf_calloc(data->bufferSize * data->channels, sizeof(short));
+			data->outputBuffers[idx] = (short*)tf_calloc(data->bufferSize * data->channels, sizeof(short));
 			memset(data->outputBuffers[idx], 0, bufferSizeBytes);
 		}
 
@@ -293,7 +296,7 @@ namespace SoLoud
 		aSoloud->mBackendCleanupFunc = soloud_opensles_deinit;
 
 		LOG_INFO( "Creating audio thread." );
-		Thread::createThread(opensles_thread, (void*)aSoloud);
+		data->mAudioThread = Thread::createThread(opensles_thread, (void*)aSoloud);
 
 		aSoloud->mBackendString = "OpenSL ES";
 		return SO_NO_ERROR;

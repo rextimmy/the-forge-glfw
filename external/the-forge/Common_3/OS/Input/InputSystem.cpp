@@ -80,7 +80,7 @@ namespace gainput
 
 #define MAX_DEVICES 16U
 
-uint32_t MAX_INPUT_GAMEPADS = 1;
+uint32_t MAX_INPUT_GAMEPADS = 4;
 uint32_t MAX_INPUT_MULTI_TOUCHES = 4;
 uint32_t MAX_INPUT_ACTIONS = 128;
 
@@ -204,6 +204,11 @@ struct InputSystemImpl : public gainput::InputListener
 	{
 #ifndef NO_DEFAULT_BINDINGS
 		{ InputBindings::BUTTON_SOUTH, gainput::MouseButtonLeft },
+		// Following are for UI windows
+		{ InputBindings::BUTTON_MOUSE_RIGHT, gainput::MouseButtonRight },
+		{ InputBindings::BUTTON_MOUSE_MIDDLE, gainput::MouseButtonMiddle },
+		{ InputBindings::BUTTON_MOUSE_SCROLL_UP, gainput::MouseButtonWheelUp },
+		{ InputBindings::BUTTON_MOUSE_SCROLL_DOWN, gainput::MouseButtonWheelDown },
 #else
 
 		{ InputBindings::BUTTON_MOUSE_LEFT, gainput::MouseButtonLeft },
@@ -211,8 +216,8 @@ struct InputSystemImpl : public gainput::InputListener
 		{ InputBindings::BUTTON_MOUSE_MIDDLE, gainput::MouseButtonMiddle },
 		{ InputBindings::BUTTON_MOUSE_SCROLL_UP, gainput::MouseButtonWheelUp },
 		{ InputBindings::BUTTON_MOUSE_SCROLL_DOWN, gainput::MouseButtonWheelDown },
-		{ InputBindings::BUTTON_MOUSE_4, gainput::MouseButton4},
 		{ InputBindings::BUTTON_MOUSE_5, gainput::MouseButton5},
+		{ InputBindings::BUTTON_MOUSE_6, gainput::MouseButton6},
 #endif
 	};
 
@@ -225,6 +230,14 @@ struct InputSystemImpl : public gainput::InputListener
 		{ InputBindings::BUTTON_R3, gainput::KeyF1 },
 		{ InputBindings::BUTTON_L3, gainput::KeyF2 },
 		{ InputBindings::BUTTON_DUMP, gainput::KeyF3 },
+		// Following are for UI text inputs
+		{ InputBindings::BUTTON_KEYLEFT, gainput::KeyLeft},
+		{ InputBindings::BUTTON_KEYRIGHT, gainput::KeyRight},
+		{ InputBindings::BUTTON_KEYSHIFTL, gainput::KeyShiftL},
+		{ InputBindings::BUTTON_KEYSHIFTR, gainput::KeyShiftR},
+		{ InputBindings::BUTTON_KEYHOME, gainput::KeyHome},
+		{ InputBindings::BUTTON_KEYEND, gainput::KeyEnd},
+		{ InputBindings::BUTTON_KEYDELETE, gainput::KeyDelete},
 #else
 		{ InputBindings::BUTTON_KEYESCAPE, gainput::KeyEscape},
 		{ InputBindings::BUTTON_KEYF1, gainput::KeyF1},
@@ -501,8 +514,8 @@ struct InputSystemImpl : public gainput::InputListener
 		mDefaultCapture = true;
 		mInputCaptured = false;
 
-		pGamepadDeviceIDs = (gainput::DeviceId*)conf_calloc(MAX_INPUT_GAMEPADS, sizeof(gainput::DeviceId));
-		pDeviceTypes = (InputDeviceType*)conf_calloc(MAX_INPUT_GAMEPADS + 4, sizeof(InputDeviceType));
+		pGamepadDeviceIDs = (gainput::DeviceId*)tf_calloc(MAX_INPUT_GAMEPADS, sizeof(gainput::DeviceId));
+		pDeviceTypes = (InputDeviceType*)tf_calloc(MAX_INPUT_GAMEPADS + 4, sizeof(InputDeviceType));
 
 		// Default device ids
 		mMouseDeviceID = gainput::InvalidDeviceId;
@@ -513,7 +526,7 @@ struct InputSystemImpl : public gainput::InputListener
 		mTouchDeviceID = gainput::InvalidDeviceId;
 
 		// create input manager
-		pInputManager = conf_new(gainput::InputManager);
+		pInputManager = tf_new(gainput::InputManager);
 		ASSERT(pInputManager);
 #ifdef _WIN32
 		pInputManager->window_instance_ = window->handle.window;
@@ -577,13 +590,13 @@ struct InputSystemImpl : public gainput::InputListener
 		ASSERT(pInputManager);
 
 		for (uint32_t i = 0; i < (uint32_t)mControlPool.size(); ++i)
-			conf_free(mControlPool[i]);
+			tf_free(mControlPool[i]);
 
-		conf_free(pGamepadDeviceIDs);
-		conf_free(pDeviceTypes);
+		tf_free(pGamepadDeviceIDs);
+		tf_free(pDeviceTypes);
 
 		ShutdownSubView();
-		conf_delete(pInputManager);
+		tf_delete(pInputManager);
 	}
 
 	void Update(uint32_t width, uint32_t height)
@@ -674,7 +687,7 @@ struct InputSystemImpl : public gainput::InputListener
 	template<typename T>
 	T* AllocateControl()
 	{
-		T* pControl = (T*)conf_calloc(1, sizeof(T));
+		T* pControl = (T*)tf_calloc(1, sizeof(T));
 		mControlPool.emplace_back(pControl);
 		return pControl;
 	}
@@ -729,11 +742,11 @@ struct InputSystemImpl : public gainput::InputListener
 
 			for (decltype(mGamepadMap)::const_iterator it = mGamepadMap.begin(); it != mGamepadMap.end(); ++it)
 				mControls[gamepadDeviceId][it->second].emplace_back(pControl);
+			for (decltype(mKeyMap)::const_iterator it = mKeyMap.begin(); it != mKeyMap.end(); ++it)
+				mControls[mKeyboardDeviceID][it->second].emplace_back(pControl);
 #if TOUCH_INPUT
 			mControls[mTouchDeviceID][TOUCH_DOWN(pDesc->mUserId)].emplace_back(pControl);
 #else
-			for (decltype(mKeyMap)::const_iterator it = mKeyMap.begin(); it != mKeyMap.end(); ++it)
-				mControls[mKeyboardDeviceID][it->second].emplace_back(pControl);
 			for (decltype(mMouseMap)::const_iterator it = mMouseMap.begin(); it != mMouseMap.end(); ++it)
 				mControls[mMouseDeviceID][it->second].emplace_back(pControl);
 #endif
@@ -894,7 +907,7 @@ struct InputSystemImpl : public gainput::InputListener
 		if (it != mGestureControls.end())
 			mGestureControls.erase(it);
 
-		conf_free(pAction);
+		tf_free(pAction);
 	}
 
 	bool InitSubView()
@@ -902,8 +915,11 @@ struct InputSystemImpl : public gainput::InputListener
 #ifdef __APPLE__
 		if (pWindow)
 		{
+			void* view = pWindow->handle.window;
+			if (!view)
+				return false;
+			
 #ifdef TARGET_IOS
-			void* view = (__bridge void*)((__bridge UIWindow*)(pWindow->handle.window)).rootViewController.view;
 			UIView*      mainView = (UIView*)CFBridgingRelease(view);
 			GainputView* newView = [[GainputView alloc] initWithFrame:mainView.bounds inputManager : *pInputManager];
 			//we want everything to resize with main view.
@@ -911,10 +927,6 @@ struct InputSystemImpl : public gainput::InputListener
 				UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin |
 				UIViewAutoresizingFlexibleBottomMargin)];
 #else
-			void* view = (__bridge void*)((__bridge NSWindow*)pWindow->handle.window).contentView;
-			if (!view)
-				return false;
-
 			NSView* mainView = (__bridge NSView*)view;
 			float retinScale = ((CAMetalLayer*)(mainView.layer)).drawableSize.width / mainView.frame.size.width;
 			GainputMacInputView* newView = [[GainputMacInputView alloc] initWithFrame:mainView.bounds
@@ -926,6 +938,15 @@ struct InputSystemImpl : public gainput::InputListener
 #endif
 
 			[mainView addSubview : newView];
+		
+#ifdef TARGET_IOS
+#else
+			NSWindow* window = [newView window];
+			BOOL madeFirstResponder = [window makeFirstResponder:newView];
+			if (!madeFirstResponder)
+				return false;
+#endif
+			
 			pGainputView = (__bridge void*)newView;
 		}
 #endif
@@ -958,7 +979,7 @@ struct InputSystemImpl : public gainput::InputListener
 	{
 		ASSERT(pWindow);
 
-#if defined(_WIN32) && !defined(_DURANGO)
+#if defined(_WIN32) && !defined(XBOX)
 		static int32_t lastCursorPosX = 0;
 		static int32_t lastCursorPosY = 0;
 
@@ -1077,10 +1098,43 @@ struct InputSystemImpl : public gainput::InputListener
 
 		GainputView* view = (__bridge GainputView*)(pGainputView);
 		[view setVirtualKeyboard : type];
+#elif defined(__ANDROID__)		
+		if ((type > 0) != mVirtualKeyboardActive)
+		{
+			mVirtualKeyboardActive = (type > 0);
+
+			/* Note: native activity's API for soft input (ANativeActivity_showSoftInput & ANativeActivity_hideSoftInput) do not work.
+			 *       So we do it manually using JNI.
+		     */
+
+			ANativeActivity* activity = pWindow->handle.activity;
+			JNIEnv* jni;
+			jint result = activity->vm->AttachCurrentThread(&jni, NULL);
+			if (result == JNI_ERR)
+			{
+				ASSERT(0);
+				return;
+			}
+
+			jclass cls = jni->GetObjectClass(activity->clazz);
+			jmethodID methodID = jni->GetMethodID(cls, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;");
+			jstring serviceName = jni->NewStringUTF("input_method");
+			jobject inputService = jni->CallObjectMethod(activity->clazz, methodID, serviceName);
+
+			jclass inputServiceCls = jni->GetObjectClass(inputService);
+			methodID = jni->GetMethodID(inputServiceCls, "toggleSoftInput", "(II)V");
+			jni->CallVoidMethod(inputService, methodID, 0, 0);
+
+			jni->DeleteLocalRef(serviceName);
+			activity->vm->DetachCurrentThread();
+
+		}
+		else
+			return;
 #endif
 	}
 
-	inline constexpr bool IsPointerType(gainput::DeviceId device)
+	inline constexpr bool IsPointerType(gainput::DeviceId device) const
 	{
 #if TOUCH_INPUT
 		return false;
@@ -1116,6 +1170,7 @@ struct InputSystemImpl : public gainput::InputListener
 				mMousePosition[0] = pMouse->GetFloat(gainput::MouseAxisX);
 				mMousePosition[1] = pMouse->GetFloat(gainput::MouseAxisY);
 				ctx.pPosition = &mMousePosition;
+				ctx.mScrollValue = pMouse->GetFloat(gainput::MouseButtonMiddle);
 			}
 #endif
 			bool executeNext = true;
@@ -1421,47 +1476,20 @@ struct InputSystemImpl : public gainput::InputListener
 					for (uint32_t i = 0; i < pControl->mAxisCount; ++i)
 						equal = equal && (pControl->mValue[i] == pControl->mNewValue[i]);
 
-					if ((((pControl->mStarted >> axis) & 0x1) == 0) && !equal)
-					{
-						pControl->mStarted |= (1 << axis);
-						pControl->mValue[axis] = pControl->mNewValue[axis];
+					pControl->mPerformed |= (1 << axis);
+					pControl->mValue[axis] = pControl->mNewValue[axis];
 
-						if (pControl->mStarted == pControl->mTarget && pDesc->pFunction)
-						{
-							ctx.mPhase = INPUT_ACTION_PHASE_STARTED;
-							ctx.mFloat3 = pControl->mValue;
-							executeNext = pDesc->pFunction(&ctx) && executeNext;
-						}
+					if (pControl->mPerformed == pControl->mTarget && pDesc->pFunction)
+					{
+						ctx.mPhase = INPUT_ACTION_PHASE_PERFORMED;
+						ctx.mFloat3 = pControl->mValue;
+						executeNext = pDesc->pFunction(&ctx) && executeNext;
 					}
 
-					if (pControl->mStarted != pControl->mTarget)
+					if (pControl->mPerformed != pControl->mTarget)
 						continue;
 
-					pControl->mValue[axis] = pControl->mNewValue[axis];
-					pControl->mPerformed |= (1 << axis);
-
-					if (pControl->mPerformed == pControl->mTarget)
-					{
-						pControl->mPerformed = 0;
-
-						bool zero = true;
-						for (uint32_t i = 0; i < pControl->mAxisCount; ++i)
-							zero = zero && (pControl->mValue[i] == 0.0f);
-						if (zero)
-						{
-							pControl->mStarted = 0;
-							pControl->mNewValue = float3(0.0f);
-							ctx.mPhase = INPUT_ACTION_PHASE_CANCELED;
-							if (pDesc->pFunction)
-								executeNext = pDesc->pFunction(&ctx) && executeNext;
-						}
-						else if (pDesc->pFunction)
-						{
-							ctx.mPhase = INPUT_ACTION_PHASE_PERFORMED;
-							ctx.mFloat3 = pControl->mValue;
-							executeNext = pDesc->pFunction(&ctx) && executeNext;
-						}
-					}
+					pControl->mPerformed = 0;
 					break;
 				}
 #if TOUCH_INPUT
@@ -1593,7 +1621,7 @@ struct InputSystemImpl : public gainput::InputListener
 
 static InputSystemImpl* pInputSystem = NULL;
 
-#if defined(_WIN32) && !defined(_DURANGO)
+#if defined(_WIN32) && !defined(XBOX)
 static void ResetInputStates()
 {
 	pInputSystem->pInputManager->ClearAllStates(pInputSystem->mMouseDeviceID);
@@ -1605,16 +1633,20 @@ static void ResetInputStates()
 }
 #endif
 
-static int32_t InputSystemHandleMessage(WindowsDesc* pWindow, void* msg)
+int32_t InputSystemHandleMessage(WindowsDesc* pWindow, void* msg)
 {
-#if defined(_WIN32) && !defined(_DURANGO)
+	if (pInputSystem == nullptr)
+	{
+		return 0;
+	}
+#if defined(_WIN32) && !defined(XBOX)
 	pInputSystem->pInputManager->HandleMessage(*(MSG*)msg);
-	if ((*(MSG*)msg).lParam == WA_INACTIVE)
+	if ((*(MSG*)msg).message == WM_ACTIVATEAPP && (*(MSG*)msg).wParam == WA_INACTIVE)
 	{
 		ResetInputStates();
 	}
 #elif defined(__ANDROID__)
-	return pInputSystem->pInputManager->HandleInput((AInputEvent*)msg);
+	return pInputSystem->pInputManager->HandleInput((AInputEvent*)msg, pWindow->handle.activity);
 #elif defined(__linux__) && !defined(GAINPUT_PLATFORM_GGP)
 	pInputSystem->pInputManager->HandleEvent(*(XEvent*)msg);
 #endif
@@ -1624,17 +1656,22 @@ static int32_t InputSystemHandleMessage(WindowsDesc* pWindow, void* msg)
 
 bool initInputSystem(WindowsDesc* window)
 {
-	pInputSystem = conf_new(InputSystemImpl);
-	if (window)
-		window->callbacks.onHandleMessage = InputSystemHandleMessage;
+	pInputSystem = tf_new(InputSystemImpl);
+
+	setCustomMessageProcessor(InputSystemHandleMessage);
+
 	return pInputSystem->Init(window);
 }
 
 void exitInputSystem()
 {
 	ASSERT(pInputSystem);
+
+	setCustomMessageProcessor(nullptr);
+
 	pInputSystem->Exit();
-	conf_delete(pInputSystem);
+	tf_delete(pInputSystem);
+	pInputSystem = NULL;
 }
 
 void updateInputSystem(uint32_t width, uint32_t height)

@@ -45,15 +45,15 @@ public:
 	void onSize(const int32_t width, const int32_t height);
 	void onMouseButton(int32_t button, int32_t action);
 	void onRender();
-
+   const char* getName() { return "ForgeDemo"; }
 private:
 
 	bool createSwapchainResources();
 
 	Renderer* mRenderer = NULL;
 	Queue* mGraphicsQueue = NULL;
-	CmdPool* mCmdPool = NULL;
-	Cmd** mCmds = { NULL };
+   CmdPool* mCmdPools[gImageCount] = { NULL };
+   Cmd* mCmds[gImageCount] = { NULL };
 	SwapChain* mSwapChain = NULL;
 	RenderTarget* mDepthBuffer = NULL;
 	LoadActionsDesc mLoadActions = {};

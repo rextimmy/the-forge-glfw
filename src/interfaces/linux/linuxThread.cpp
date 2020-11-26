@@ -25,11 +25,11 @@
 
 #include <sys/sysctl.h>
 
-#include "Common_3/OS/Interfaces/IThread.h"
-#include "Common_3/OS/Interfaces/IOperatingSystem.h"
-#include "Common_3/OS/Interfaces/ILog.h"
+#include "OS/Interfaces/IThread.h"
+#include "OS/Interfaces/IOperatingSystem.h"
+#include "OS/Interfaces/ILog.h"
 
-#include "Common_3/OS/Interfaces/IMemory.h"
+#include "OS/Interfaces/IMemory.h"
 
 bool Mutex::Init(uint32_t spinCount, const char* name)
 {

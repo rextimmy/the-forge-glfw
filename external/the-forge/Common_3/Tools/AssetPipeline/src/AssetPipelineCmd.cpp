@@ -7,7 +7,7 @@
 
 #include "../../../OS/Interfaces/IMemory.h"
 
-const char* gApplicationName = NULL;
+const char* gApplicationName = "AssetPipelineCmd";
 
 void PrintHelp()
 {
@@ -25,15 +25,14 @@ void PrintHelp()
 			"\t -h | -help                    : Print usage information.\n");
 }
 
+ResourceDirectory RD_APPLICATION = RD_MIDDLEWARE_0;
+
 int AssetPipelineCmd(int argc, char** argv)
 {
+	fsSetPathForResourceDir(pSystemFileIO, RM_DEBUG, RD_APPLICATION, "");
+
 	time_t appLastModified = 0;
-	if (argc > 0)
-	{
-		gApplicationName = argv[0];
-        PathHandle applicationPath = fsGetApplicationPath();
-		appLastModified = fsGetLastModifiedTime(applicationPath);
-	}
+	appLastModified = fsGetLastModifiedTime(RD_APPLICATION, gApplicationName);
 
 	if (argc == 1)
 	{
@@ -53,16 +52,8 @@ int AssetPipelineCmd(int argc, char** argv)
 		return 1;
 	}
 
-    FileSystem* fileSystem = fsGetSystemFileSystem();
-    PathHandle workingDir = fsGetApplicationDirectory();
-    
-	PathHandle inputDir = fsCreatePath(fileSystem, argv[2]);
-    if (!inputDir)
-        inputDir = fsAppendPathComponent(workingDir, argv[2]);
-    
-	PathHandle outputDir = fsCreatePath(fileSystem, argv[3]);
-    if (!outputDir)
-        outputDir = fsAppendPathComponent(workingDir, argv[3]);
+	fsSetPathForResourceDir(pSystemFileIO, RM_CONTENT, RD_INPUT, "");
+	fsSetPathForResourceDir(pSystemFileIO, RM_SAVE_0, RD_OUTPUT, "");
 
 	ProcessAssetsSettings settings = {};
 	settings.quiet = false;
@@ -106,22 +97,17 @@ int AssetPipelineCmd(int argc, char** argv)
 
 	if (stricmp(command, "-pa") == 0)
 	{
-		if (!AssetPipeline::ProcessAnimations(inputDir, outputDir, &settings))
-			return 1;
-	}
-	else if (stricmp(command, "-pt") == 0)
-	{
-		if (!AssetPipeline::ProcessTextures(inputDir, outputDir, &settings))
+		if (!AssetPipeline::ProcessAnimations(&settings))
 			return 1;
 	}
 	else if (stricmp(command, "-pvt") == 0)
 	{
-		if (!AssetPipeline::ProcessVirtualTextures(inputDir, outputDir, &settings))
+		if (!AssetPipeline::ProcessVirtualTextures(&settings))
 			return 1;
 	}
 	else if (stricmp(command, "-ptfx") == 0)
 	{
-		if (!AssetPipeline::ProcessTFX(inputDir, outputDir, &settings))
+		if (!AssetPipeline::ProcessTFX(&settings))
 			return 1;
 	}
 	else
@@ -134,21 +120,32 @@ int AssetPipelineCmd(int argc, char** argv)
 
 int main(int argc, char** argv)
 {
-	extern bool MemAllocInit();
+	extern bool MemAllocInit(const char*);
 	extern void MemAllocExit();
 
-	if (!MemAllocInit())
+	if (!MemAllocInit(gApplicationName))
 		return EXIT_FAILURE;
 
-	if (!fsInitAPI())
+	FileSystemInitDesc fsDesc = {};
+	fsDesc.pAppName = gApplicationName;
+
+	if (argc >= 4)
+	{
+		fsDesc.pResourceMounts[RM_CONTENT] = argv[2];
+		fsDesc.pResourceMounts[RM_SAVE_0] = argv[3];
+	}
+
+	if (!initFileSystem(&fsDesc))
 		return EXIT_FAILURE;
 
-	Log::Init();
+	fsSetPathForResourceDir(pSystemFileIO, RM_DEBUG, RD_LOG, "");
+
+	Log::Init(gApplicationName);
 
 	int ret = AssetPipelineCmd(argc, argv);
 
 	Log::Exit();
-	fsExitAPI();
+	exitFileSystem();
 	MemAllocExit();
 
 	return ret;

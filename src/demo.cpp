@@ -24,7 +24,7 @@
 #include <OS/Interfaces/IInput.h>
 
 //The-forge memory allocator
-extern bool MemAllocInit();
+extern bool MemAllocInit(const char* name);
 extern void MemAllocExit();
 
 Demo::~Demo()
@@ -53,11 +53,11 @@ Demo::~Demo()
 		{
 			removeFence(mRenderer, mRenderCompleteFences[i]);
 			removeSemaphore(mRenderer, mRenderCompleteSemaphores[i]);
+         removeCmd(mRenderer, mCmds[i]);
+         removeCmdPool(mRenderer, mCmdPools[i]);
 		}
 
 		removeSemaphore(mRenderer, mImageAcquiredSemaphore);
-		removeCmd_n(mRenderer, gImageCount, mCmds);
-		removeCmdPool(mRenderer, mCmdPool);
 		removeQueue(mRenderer, mGraphicsQueue);
 
 		exitResourceLoaderInterface(mRenderer);
@@ -65,7 +65,7 @@ Demo::~Demo()
 	}
 
 	Log::Exit();
-   fsExitAPI();
+   exitFileSystem();
 	MemAllocExit();
 }
 
@@ -75,54 +75,48 @@ bool Demo::init(GLFWwindow *pWindow)
 	mWindow = pWindow;
 
 	//init memory allocator
-	if (!MemAllocInit())
+	if (!MemAllocInit(getName()))
 	{
 		printf("Failed to init memory allocator\n");
 		return false;
 	}
 
+   FileSystemInitDesc fsDesc = {};
+   fsDesc.pAppName = getName();
+
 	//init file system
-	if (!fsInitAPI())
+   if (!initFileSystem(&fsDesc))
 	{
 		printf("Failed to init file system\n");
 		return false;
 	}
 
+   //set root directory for the log, must set this before we initialize the log
+   fsSetPathForResourceDir(pSystemFileIO, RM_DEBUG, RD_LOG, "");
+
 	//init the log
-	Log::Init();
+	Log::Init(getName());
 
-	//set the root folder path
-	PathHandle programDirectory = fsGetApplicationDirectory();
-	if (!fsPlatformUsesBundledResources())
-	{
-      fsSetResourceDirRootPath(programDirectory);
-	}
-	else
-	{
-      LOGF(LogLevel::eERROR, "We don't support bundled resources");
-		return false;
-	}
-
-	//work out which api we are using
-	RendererApi api;
+   //work out which api we are using
+   RendererApi api;
 #if defined(VULKAN)
-	api = RENDERER_API_VULKAN;
+   api = RENDERER_API_VULKAN;
 #elif defined(DIRECT3D12)
-	api = RENDERER_API_D3D12;
+   api = RENDERER_API_D3D12;
 #else
-	#error Trying to use a renderer API not supported by this demo
+   #error Trying to use a renderer API not supported by this demo
 #endif
 
 	//set directories for the selected api
 	switch (api)
 	{
 	case RENDERER_API_D3D12:
-      fsSetRelativePathForResourceDirEnum(RD_SHADER_SOURCES, "shaders/d3d12/");
-      fsSetRelativePathForResourceDirEnum(RD_SHADER_BINARIES, "shaders/d3d12/binary/");
+      fsSetPathForResourceDir(pSystemFileIO, RM_CONTENT, RD_SHADER_SOURCES, "shaders/d3d12/");
+      fsSetPathForResourceDir(pSystemFileIO, RM_CONTENT, RD_SHADER_BINARIES, "shaders/d3d12/binary/");
 		break;
 	case RENDERER_API_VULKAN:
-      fsSetRelativePathForResourceDirEnum(RD_SHADER_SOURCES, "shaders/vulkan/");
-      fsSetRelativePathForResourceDirEnum(RD_SHADER_BINARIES, "shaders/vulkan/binary/");
+      fsSetPathForResourceDir(pSystemFileIO, RM_CONTENT, RD_SHADER_SOURCES, "shaders/vulkan/");
+      fsSetPathForResourceDir(pSystemFileIO, RM_CONTENT, RD_SHADER_BINARIES, "shaders/vulkan/binary/");
 		break;
 	default:
       LOGF(LogLevel::eERROR, "No support for this API");
@@ -130,26 +124,18 @@ bool Demo::init(GLFWwindow *pWindow)
 	}
 
 	//set texture dir
-	fsSetRelativePathForResourceDirEnum(RD_TEXTURES, "textures/");
+   fsSetPathForResourceDir(pSystemFileIO, RM_CONTENT, RD_TEXTURES, "textures/");
 	//set font dir
-	fsSetRelativePathForResourceDirEnum(RD_BUILTIN_FONTS, "fonts/");
+   fsSetPathForResourceDir(pSystemFileIO, RM_CONTENT, RD_FONTS, "fonts/");
 	//set GPUCfg dir
-	fsSetRelativePathForResourceDirEnum(RD_GPU_CONFIG, "gpucfg/");
-	//set UI dir
-	fsSetRelativePathForResourceDirEnum(RD_MIDDLEWARE_UI, "ui/");
-	//set Text dir
-	fsSetRelativePathForResourceDirEnum(RD_MIDDLEWARE_TEXT, "text/");
+   fsSetPathForResourceDir(pSystemFileIO, RM_CONTENT, RD_GPU_CONFIG, "gpucfg/");
 
 	//get framebuffer size, it may be different from window size
 	glfwGetFramebufferSize(pWindow, &mFbWidth, &mFbHeight);
 
 	//init renderer interface
 	RendererDesc rendererDesc = {};
-	rendererDesc.mApi = api;
-	rendererDesc.mGpuMode = GPU_MODE_SINGLE;
-	rendererDesc.mShaderTarget = shader_target_5_1; //5_1 will do for this demo
-
-	initRenderer("The-Forge Demo", &rendererDesc, &mRenderer);
+	initRenderer(getName(), &rendererDesc, &mRenderer);
 	if (mRenderer == NULL)
 		return false;
 
@@ -162,21 +148,22 @@ bool Demo::init(GLFWwindow *pWindow)
 	queueDesc.mFlag = QUEUE_FLAG_NONE;//use QUEUE_FLAG_INIT_MICROPROFILE to enable profiling;
 	addQueue(mRenderer, &queueDesc, &mGraphicsQueue);
 
-	//create command pool for the graphics queue
-	CmdPoolDesc cmdPoolDesc = {};
-	cmdPoolDesc.pQueue = mGraphicsQueue;
-	addCmdPool(mRenderer, &cmdPoolDesc, &mCmdPool);
 
-	//create command buffer for each potential swapchain image
-	CmdDesc cmdDesc = {};
-	cmdDesc.pPool = mCmdPool;
-	addCmd_n(mRenderer, &cmdDesc, gImageCount, &mCmds);
-
-	//create sync objects
 	for (uint32_t i = 0; i < gImageCount; ++i)
 	{
+      //sync objects
 		addFence(mRenderer, &mRenderCompleteFences[i]);
 		addSemaphore(mRenderer, &mRenderCompleteSemaphores[i]);
+
+      //command pool for the graphics queue
+      CmdPoolDesc cmdPoolDesc = {};
+      cmdPoolDesc.pQueue = mGraphicsQueue;
+      addCmdPool(mRenderer, &cmdPoolDesc, &mCmdPools[i]);
+
+      //command buffer
+      CmdDesc cmdDesc = {};
+      cmdDesc.pPool = mCmdPools[i];
+      addCmd(mRenderer, &cmdDesc, &mCmds[i]);
 	}
 	addSemaphore(mRenderer, &mImageAcquiredSemaphore);
 
@@ -184,7 +171,7 @@ bool Demo::init(GLFWwindow *pWindow)
 	if (!mAppUI.Init(mRenderer))
 		return false;
 
-	mAppUI.LoadFont("TitilliumText/TitilliumText-Bold.otf", RD_BUILTIN_FONTS);
+	mAppUI.LoadFont("TitilliumText/TitilliumText-Bold.otf");
 
 	//Load action for the render and depth target
 	mLoadActions.mLoadActionsColor[0] = LOAD_ACTION_CLEAR;
@@ -243,7 +230,7 @@ bool Demo::init(GLFWwindow *pWindow)
 		desc.mDesc.mSize = vertices.size() * sizeof(Vertex);
 		desc.mDesc.mMemoryUsage = RESOURCE_MEMORY_USAGE_GPU_ONLY;
 
-		addResource(&desc, NULL, LOAD_PRIORITY_NORMAL);
+		addResource(&desc, NULL);
 	}
 
 	//index buffer
@@ -273,17 +260,17 @@ bool Demo::init(GLFWwindow *pWindow)
 		desc.mDesc.mSize = mIndexCount * sizeof(uint16_t);
 		desc.mDesc.mMemoryUsage = RESOURCE_MEMORY_USAGE_GPU_ONLY;
 
-		addResource(&desc, NULL, LOAD_PRIORITY_NORMAL);
+		addResource(&desc, NULL);
 	}
 
 	//texture
 	{
-		PathHandle path = fsGetPathInResourceDirEnum(RD_TEXTURES, "the-forge.dds");
 		TextureLoadDesc desc = {};
 		desc.ppTexture = &mTexture;
-		desc.pFilePath = path;
+      //the resource loader will add the filename extension, in this case it will be dds
+      desc.pFileName = "the-forge";
 
-		addResource(&desc, NULL, LOAD_PRIORITY_NORMAL);
+		addResource(&desc, NULL);
 	}
 
 	//sampler 
@@ -298,8 +285,8 @@ bool Demo::init(GLFWwindow *pWindow)
 	//shader
 	{
 		ShaderLoadDesc desc = {};
-		desc.mStages[0] = { "demo.vert", NULL, 0, RD_SHADER_SOURCES };
-		desc.mStages[1] = { "demo.frag", NULL, 0, RD_SHADER_SOURCES };
+		desc.mStages[0] = { "demo.vert", NULL, 0 };
+		desc.mStages[1] = { "demo.frag", NULL, 0 };
 		desc.mTarget = (ShaderTarget)mRenderer->mShaderTarget;
 
 		addShader(mRenderer, &desc, &mShader);
@@ -520,10 +507,11 @@ void Demo::onRender()
 	const glm::mat4 worldViewProj = mProjMatrix * mViewMatrix *mModelMatrix;
 
 	//aquire the next swapchain image
-	acquireNextImage(mRenderer, mSwapChain, mImageAcquiredSemaphore, NULL, &mFrameIndex);
+   uint32_t swapchainImageIndex;
+	acquireNextImage(mRenderer, mSwapChain, mImageAcquiredSemaphore, NULL, &swapchainImageIndex);
 
 	//make it easier on our fingers :)
-	RenderTarget* pRenderTarget = mSwapChain->ppRenderTargets[mFrameIndex];
+	RenderTarget* pRenderTarget = mSwapChain->ppRenderTargets[swapchainImageIndex];
 	Semaphore*    pRenderCompleteSemaphore = mRenderCompleteSemaphores[mFrameIndex];
 	Fence*        pRenderCompleteFence = mRenderCompleteFences[mFrameIndex];
 
@@ -533,17 +521,18 @@ void Demo::onRender()
 	if (fenceStatus == FENCE_STATUS_INCOMPLETE)
 		waitForFences(mRenderer, 1, &pRenderCompleteFence);
 
+   // Reset cmd pool for this frame
+   resetCmdPool(mRenderer, mCmdPools[mFrameIndex]);
+
 	//command buffer for this frame
 	Cmd* pCmd = mCmds[mFrameIndex];
 	beginCmd(pCmd);
 
-	//transition our render & depth target to a state that we can write to
-	RenderTargetBarrier barriers[] = 
-	{
-		{ pRenderTarget, RESOURCE_STATE_RENDER_TARGET },
-		{ mDepthBuffer, RESOURCE_STATE_DEPTH_WRITE },
-	};
-	cmdResourceBarrier(pCmd, 0, NULL, 0, NULL, 2, barriers);
+	//transition our render target to a state that we can write to
+   RenderTargetBarrier barriers[] = {
+            { pRenderTarget, RESOURCE_STATE_PRESENT, RESOURCE_STATE_RENDER_TARGET },
+   };
+   cmdResourceBarrier(pCmd, 0, NULL, 0, NULL, 1, barriers);
 
 	//bind render and depth target and set the viewport and scissor rectangle
 	mLoadActions.mLoadActionsColor[0] = LOAD_ACTION_CLEAR;
@@ -576,7 +565,7 @@ void Demo::onRender()
 	//make sure no render target is bound
 	cmdBindRenderTargets(pCmd, 0, NULL, NULL, NULL, NULL, NULL, -1, -1);
 	//transition render target to a present state
-	barriers[0] = { pRenderTarget, RESOURCE_STATE_PRESENT };
+   barriers[0] = { pRenderTarget, RESOURCE_STATE_RENDER_TARGET, RESOURCE_STATE_PRESENT };
 	cmdResourceBarrier(pCmd, 0, NULL, 0, NULL, 1, barriers);
 
 	//end the command buffer
@@ -595,7 +584,7 @@ void Demo::onRender()
 
 	//present the graphics queue
 	QueuePresentDesc presentDesc = {};
-	presentDesc.mIndex = mFrameIndex;
+	presentDesc.mIndex = swapchainImageIndex;
 	presentDesc.mWaitSemaphoreCount = 1;
 	presentDesc.pSwapChain = mSwapChain;
 	presentDesc.ppWaitSemaphores = &pRenderCompleteSemaphore;
@@ -608,4 +597,6 @@ void Demo::onRender()
 		waitQueueIdle(mGraphicsQueue);
 		toggleVSync(mRenderer, &mSwapChain);
 	}
+
+   mFrameIndex = (mFrameIndex + 1) % gImageCount;
 }

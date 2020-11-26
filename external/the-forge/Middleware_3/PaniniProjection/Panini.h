@@ -29,7 +29,7 @@
 #include "../../Common_3/OS/Interfaces/IMiddleware.h"
 #include "../../Common_3/OS/Interfaces/IFileSystem.h"
 
-extern ResourceDirEnum RD_MIDDLEWARE_PANINI;
+extern ResourceDirectory RD_MIDDLEWARE_PANINI;
 
 // forward decls
 struct Texture;
@@ -39,6 +39,7 @@ struct RootSignature;
 struct Pipeline;
 struct Sampler;
 struct DescriptorSet;
+struct PipelineCache;
 
 /************************************************************************/
 /*					   HOW TO USE THIS MODULE
@@ -101,7 +102,7 @@ class Panini: public IMiddleware
 public:
 	// our init function should only be called once
 	// the middleware has to keep these pointers
-	bool Init(Renderer* renderer);
+	bool Init(Renderer* renderer, PipelineCache* pCache = NULL);
 	void Exit();
 
 	// when app is loaded, app is provided of the render targets to load
@@ -125,6 +126,7 @@ public:
 
 private:
 	Renderer*         pRenderer;
+	PipelineCache*    pPipelineCache;
 
 	Shader*           pShader = NULL;
 	RootSignature*    pRootSignature = NULL;

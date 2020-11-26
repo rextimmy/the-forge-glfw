@@ -22,8 +22,6 @@
  * under the License.
 */
 
-#ifdef __ANDROID__
-
 #include <ctime>
 #include <unistd.h>
 #include <android/configuration.h>
@@ -56,7 +54,6 @@ void toggleFullscreen(WindowsDesc* window)
 #include "../Interfaces/IFileSystem.h"
 
 static IApp* pApp = NULL;
-ANativeActivity* android_activity = NULL;
 
 struct DisplayMetrics
 {
@@ -185,13 +182,28 @@ void handleMessages(WindowsDesc* winDesc) { return; }
 
 void onStart(ANativeActivity* activity) { printf("start\b"); }
 
+static CustomMessageProcessor sCustomProc = nullptr;
+void setCustomMessageProcessor(CustomMessageProcessor proc)
+{
+	sCustomProc = proc;
+}
+
 static bool    windowReady = false;
 static bool    isActive = false;
 static int32_t handle_input(struct android_app* app, AInputEvent* event)
 {
-    if (gWindow.callbacks.onHandleMessage)
-        return gWindow.callbacks.onHandleMessage(&gWindow, event);
-    return 0;
+	if (AKeyEvent_getKeyCode(event) == AKEYCODE_BACK)
+	{
+		app->destroyRequested = 1;
+		return 1;
+	}
+
+	if (sCustomProc != nullptr)
+	{
+		sCustomProc(&gWindow, event);
+	}
+	
+	return 0;
 }
 
 // Process the next main command.
@@ -203,16 +215,19 @@ void handle_cmd(android_app* app, int32_t cmd)
 		{
 			__android_log_print(ANDROID_LOG_VERBOSE, "the-forge-app", "init window");
 
+            int32_t screenWidth = ANativeWindow_getWidth(app->window);
+            int32_t screenHeight = ANativeWindow_getHeight(app->window);
+			            
 			IApp::Settings* pSettings = &pApp->mSettings;
-			gWindow.windowedRect = { 0, 0, ANativeWindow_getWidth(app->window), ANativeWindow_getHeight(app->window) };
+			gWindow.windowedRect = { 0, 0, screenWidth, screenHeight };
 			gWindow.fullScreen = pSettings->mFullScreen;
 			gWindow.maximized = false;
 			openWindow(pApp->GetName(), &gWindow);
 
-			gWindow.handle.window = reinterpret_cast<void*>(app->window);
+			gWindow.handle.window = app->window;
 
-			pSettings->mWidth = ANativeWindow_getWidth(app->window);
-			pSettings->mHeight = ANativeWindow_getHeight(app->window);
+			pSettings->mWidth = screenWidth;
+			pSettings->mHeight = screenHeight;
 			pApp->pWindow = &gWindow;
 
 			// The window is being shown, mark it as ready.
@@ -265,32 +280,35 @@ void handle_cmd(android_app* app, int32_t cmd)
 	}
 }
 
-// Forward declare the function used by the Android FileSystem to access the ANativeActivity.
-void AndroidFS_SetNativeActivity(ANativeActivity* nativeActivity);
-
 int AndroidMain(void* param, IApp* app)
 {
-	extern bool MemAllocInit();
+	extern bool MemAllocInit(const char*);
 	extern void MemAllocExit();
 
-
-	if (!MemAllocInit())
-	{
-		__android_log_print(ANDROID_LOG_ERROR, "The-Forge", "Error starting application");
-		return EXIT_FAILURE;
-	}
 	struct android_app* android_app = (struct android_app*)param;
-	android_activity = android_app->activity;
-	AndroidFS_SetNativeActivity(android_activity);
-	if (!fsInitAPI())
+	
+	if (!MemAllocInit(app->GetName()))
 	{
 		__android_log_print(ANDROID_LOG_ERROR, "The-Forge", "Error starting application");
 		return EXIT_FAILURE;
 	}
-	Log::Init();
+
+	FileSystemInitDesc fsDesc = {};
+	fsDesc.pPlatformData = android_app->activity;
+	fsDesc.pAppName = app->GetName();
+	if (!initFileSystem(&fsDesc))
+	{
+		__android_log_print(ANDROID_LOG_ERROR, "The-Forge", "Error starting application");
+		return EXIT_FAILURE;
+	}
+
+	fsSetPathForResourceDir(pSystemFileIO, RM_DEBUG, RD_LOG, "");
+
+	Log::Init(app->GetName());
 
 
 	// Set the callback to process system events
+	gWindow.handle.activity = android_app->activity;
 	android_app->onAppCmd = handle_cmd;
 	pApp = app;
 
@@ -367,16 +385,14 @@ int AndroidMain(void* param, IApp* app)
 	pApp->Exit();
 
 	Log::Exit();
-	fsExitAPI();
+	exitFileSystem();
 	MemAllocExit();
 
 #ifdef AUTOMATED_TESTING
 	__android_log_print(ANDROID_LOG_INFO, "The-Forge", "Success terminating application");
-	exit(0);
 #endif
 
-	return 0;
+	exit(0);
 }
 /************************************************************************/
 /************************************************************************/
-#endif

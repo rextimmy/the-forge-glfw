@@ -29,6 +29,8 @@ static gainput::InputManager* gGainputInputManager;
 #include <time.h>
 #elif defined(GAINPUT_PLATFORM_ORBIS)
 #include <time.h>
+#elif defined(GAINPUT_PLATFORM_PROSPERO)
+#include <time.h>
 #endif
 
 #include <stdlib.h>
@@ -208,7 +210,7 @@ InputManager::GetTime() const
 {
 	if (useSystemTime_)
 	{
-#if defined(GAINPUT_PLATFORM_LINUX) || defined(GAINPUT_PLATFORM_ANDROID) || defined(GAINPUT_PLATFORM_GGP) || defined(GAINPUT_PLATFORM_ORBIS)
+#if defined(GAINPUT_PLATFORM_LINUX) || defined(GAINPUT_PLATFORM_ANDROID) || defined(GAINPUT_PLATFORM_GGP) || defined(GAINPUT_PLATFORM_ORBIS) || defined(GAINPUT_PLATFORM_PROSPERO)
 	struct timespec ts;
 	if (clock_gettime(CLOCK_MONOTONIC, &ts) == -1)
 	{
@@ -487,7 +489,7 @@ InputManager::HandleMessage(const MSG& msg)
 
 #if defined(GAINPUT_PLATFORM_ANDROID)
 int32_t
-InputManager::HandleInput(AInputEvent* event)
+InputManager::HandleInput(AInputEvent* event, ANativeActivity* activity)
 {
 	int handled = 0;
 	for (DeviceMap::const_iterator it = devices_.begin();
@@ -512,7 +514,14 @@ InputManager::HandleInput(AInputEvent* event)
 			InputDeviceKeyboard* keyboard = static_cast<InputDeviceKeyboard*>(it->second);
 			InputDeviceKeyboardImplAndroid* keyboardImpl = static_cast<InputDeviceKeyboardImplAndroid*>(keyboard->GetPimpl());
 			GAINPUT_ASSERT(keyboardImpl);
-			handled |= keyboardImpl->HandleInput(event);
+			handled |= keyboardImpl->HandleInput(event, activity);
+		}
+		else if (it->second->GetType() == InputDevice::DT_PAD)
+		{
+			InputDevicePad* pad = static_cast<InputDevicePad*>(it->second);
+			InputDevicePadImplAndroid* padImpl = static_cast<InputDevicePadImplAndroid*>(pad->GetPimpl());
+			GAINPUT_ASSERT(padImpl);
+			handled |= padImpl->HandleInput(event);
 		}
 	}
 	return handled;

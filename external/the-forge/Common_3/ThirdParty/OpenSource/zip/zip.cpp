@@ -28,7 +28,13 @@
 #else
 
 #include <unistd.h> // needed for symlink() on BSD
+
+#if defined(ORBIS) || defined(PROSPERO)
+// Not supported
+int symlink(const char *target, const char *linkpath) { return -1; }
+#else
 int symlink(const char *target, const char *linkpath); // needed on Linux
+#endif
 
 #define MKDIR(DIRNAME) mkdir(DIRNAME, 0755)
 #define STRCLONE(STR) ((STR) ? strdup(STR) : NULL)
@@ -42,9 +48,9 @@ int symlink(const char *target, const char *linkpath); // needed on Linux
 #include "../../../OS/Interfaces/IMemory.h"
 // CONFFX_END
 
-#ifndef MAX_PATH
-#define MAX_PATH 32767 /* # chars in a path name including NULL */
-#endif
+//#ifndef MAX_PATH
+//#define MAX_PATH 32767 /* # chars in a path name including NULL */
+//#endif
 
 #ifndef HAS_DEVICE
 #define HAS_DEVICE(P) 0
@@ -62,71 +68,17 @@ int symlink(const char *target, const char *linkpath); // needed on Linux
 #define CLEANUP(ptr)                                                           \
   do {                                                                         \
     if (ptr) {                                                                 \
-      conf_free((void *)ptr);                                                       \
+      tf_free((void *)ptr);                                                  \
       ptr = NULL;                                                              \
     }                                                                          \
   } while (0)
 // CONFFX_END
 
-static const char *base_name(const char *name) {
-  char const *p;
-  char const *base = name += FILESYSTEM_PREFIX_LEN(name);
-  int all_slashes = 1;
-
-  for (p = name; *p; p++) {
-    if (ISSLASH(*p))
-      base = p + 1;
-    else
-      all_slashes = 0;
-  }
-
-  /* If NAME is all slashes, arrange to return `/'. */
-  if (*base == '\0' && ISSLASH(*name) && all_slashes)
-    --base;
-
-  return base;
-}
-
-static int mkpath(char *path) {
-  char *p;
-  char npath[MAX_PATH + 1];
-  int len = 0;
-  int has_device = HAS_DEVICE(path);
-
-  memset(npath, 0, MAX_PATH + 1);
-  if (has_device) {
-    // only on windows
-    npath[0] = path[0];
-    npath[1] = path[1];
-    len = 2;
-  }
-  for (p = path + len; *p && len < MAX_PATH; p++) {
-    if (ISSLASH(*p) && ((!has_device && len > 0) || (has_device && len > 2))) {
-#if defined(_WIN32) || defined(__WIN32__) || defined(_MSC_VER) ||              \
-    defined(__MINGW32__)
-#else
-      if ('\\' == *p) {
-        *p = '/';
-      }
-#endif
-
-      if (MKDIR(npath) == -1) {
-        if (errno != EEXIST) {
-          return -1;
-        }
-      }
-    }
-    npath[len++] = *p;
-  }
-
-  return 0;
-}
-
 static char *strrpl(const char *str, size_t n, char oldchar, char newchar) {
   char c;
   size_t i;
   // CONFFX_BEGIN - Custom Allocator
-  char *rpl = (char *)conf_calloc((1 + n), sizeof(char));
+  char *rpl = (char *)tf_calloc((1 + n), sizeof(char));
   // CONFFX_END
   char *begin = rpl;
   if (!rpl) {
@@ -169,26 +121,27 @@ struct zip_t {
 // Heap allocation callbacks.
 // Note that mz_alloc_func parameter types purpsosely differ from zlib's:
 // items/size is size_t, not unsigned long.
-static void* conf_mz_alloc_func(void *opaque, size_t items, size_t size)
+static void* tf_mz_alloc_func(void *opaque, size_t items, size_t size)
 {
-	return conf_calloc(items, size);
+	return tf_calloc(items, size);
 }
 
-static void conf_mz_free_func(void *opaque, void *address)
+static void tf_mz_free_func(void *opaque, void *address)
 {
-	conf_free(address);
+	tf_free(address);
 }
 
-static void* conf_mz_realloc_func(void *opaque, void *address, size_t items, size_t size)
+static void* tf_mz_realloc_func(void *opaque, void *address, size_t items, size_t size)
 {
-	return conf_realloc(address, items * size);
+	return tf_realloc(address, items * size);
 }
 // CONFFX_END
 
-struct zip_t *zip_open(const char *zipname, int level, char mode) {
+// CONFFX_CHANGE - Custom File IO
+struct zip_t *zip_open(ResourceDirectory resourceDirectory, const char* fileName, int level, char mode) {
   struct zip_t *zip = NULL;
 
-  if (!zipname || strlen(zipname) < 1) {
+  if (!strlen(fileName)) {
     // zip_t archive name is empty or NULL
     goto cleanup;
   }
@@ -201,22 +154,22 @@ struct zip_t *zip_open(const char *zipname, int level, char mode) {
   }
 
   // CONFFX_BEGIN - Custom Allocator
-  zip = (struct zip_t *)conf_calloc((size_t)1, sizeof(struct zip_t));
+  zip = (struct zip_t *)tf_calloc((size_t)1, sizeof(struct zip_t));
   // CONFFX_END
   if (!zip)
     goto cleanup;
 
   zip->level = (mz_uint)level;
   // CONFFX_BEGIN - Custom Allocator
-  zip->archive.m_pAlloc = conf_mz_alloc_func;
-  zip->archive.m_pFree = conf_mz_free_func;
-  zip->archive.m_pRealloc = conf_mz_realloc_func;
+  zip->archive.m_pAlloc = tf_mz_alloc_func;
+  zip->archive.m_pFree = tf_mz_free_func;
+  zip->archive.m_pRealloc = tf_mz_realloc_func;
   // CONFFX_END
 
   switch (mode) {
   case 'w':
     // Create a new archive.
-    if (!mz_zip_writer_init_file(&(zip->archive), zipname, 0)) {
+    if (!mz_zip_writer_init_file(&(zip->archive), resourceDirectory, fileName, 0)) {
       // Cannot initialize zip_archive writer
       goto cleanup;
     }
@@ -225,14 +178,14 @@ struct zip_t *zip_open(const char *zipname, int level, char mode) {
   case 'r':
   case 'a':
     if (!mz_zip_reader_init_file(
-            &(zip->archive), zipname,
+            &(zip->archive), resourceDirectory, fileName,
             zip->level | MZ_ZIP_FLAG_DO_NOT_SORT_CENTRAL_DIRECTORY)) {
       // An archive file does not exist or cannot initialize
       // zip_archive reader
       goto cleanup;
     }
     if (mode == 'a' &&
-        !mz_zip_writer_init_from_reader(&(zip->archive), zipname)) {
+        !mz_zip_writer_init_from_reader(&(zip->archive), resourceDirectory, fileName)) {
       mz_zip_reader_end(&(zip->archive));
       goto cleanup;
     }
@@ -739,7 +692,8 @@ ssize_t zip_entry_noallocread(struct zip_t *zip, void *buf, size_t bufsize) {
   return (ssize_t)zip->entry.uncomp_size;
 }
 
-int zip_entry_fread(struct zip_t *zip, const char *filename) {
+// CONFFX_CHANGE - Custom File IO
+int zip_entry_fread(struct zip_t *zip, const ResourceDirectory resourceDirectory, const char* fileName) {
   mz_zip_archive *pzip = NULL;
   mz_uint idx;
   mz_uint32 xattr = 0;
@@ -763,7 +717,7 @@ int zip_entry_fread(struct zip_t *zip, const char *filename) {
     return -1;
   }
 
-  if (!mz_zip_reader_extract_to_file(pzip, idx, filename, 0)) {
+  if (!mz_zip_reader_extract_to_file(pzip, idx, resourceDirectory, fileName, 0)) {
     return -1;
   }
 
@@ -774,9 +728,11 @@ int zip_entry_fread(struct zip_t *zip, const char *filename) {
     return -1;
   }
 
+  char path[FS_MAX_PATH] = {};
+  fsAppendPathComponent(fsGetResourceDirectory(resourceDirectory), fileName, path);
   xattr = (info.m_external_attr >> 16) & 0xFFFF;
   if (xattr > 0) {
-    if (chmod(filename, (mode_t)xattr) < 0) {
+    if (chmod(path, (mode_t)xattr) < 0) {
       return -1;
     }
   }
@@ -818,14 +774,15 @@ int zip_total_entries(struct zip_t *zip) {
   return (int)zip->archive.m_total_files;
 }
 
-int zip_create(const char *zipname, const char *filenames[], size_t len) {
+// CONFFX_CHANGE - Custom File IO
+int zip_create(const ResourceDirectory resourceDirectory, const char* fileName, const char *filenames[], size_t len) {
   int status = 0;
   size_t i;
   mz_zip_archive zip_archive;
   struct MZ_FILE_STAT_STRUCT file_stat;
   mz_uint32 ext_attributes = 0;
 
-  if (!zipname || strlen(zipname) < 1) {
+  if (!strlen(fileName)) {
     // zip_t archive name is empty or NULL
     return -1;
   }
@@ -836,7 +793,7 @@ int zip_create(const char *zipname, const char *filenames[], size_t len) {
     return -1;
   }
 
-  if (!mz_zip_writer_init_file(&zip_archive, zipname, 0)) {
+  if (!mz_zip_writer_init_file(&zip_archive, resourceDirectory, fileName, 0)) {
     // Cannot initialize zip_archive writer
     return -1;
   }
@@ -850,19 +807,20 @@ int zip_create(const char *zipname, const char *filenames[], size_t len) {
       break;
     }
 
-    if (MZ_FILE_STAT(name, &file_stat) != 0) {
-      // problem getting information - check errno
-      status = -1;
-      break;
-    }
+	//if (!fsFileExists(resourceDirectory, name)) {
+    //  // problem getting information - check errno
+    //  status = -1;
+    //  break;
+    //}
 
     if ((file_stat.st_mode & 0200) == 0) {
       // MS-DOS read-only attribute
       ext_attributes |= 0x01;
     }
     ext_attributes |= (mz_uint32)((file_stat.st_mode & 0xFFFF) << 16);
-
-    if (!mz_zip_writer_add_file(&zip_archive, base_name(name), name, "", 0,
+	char tempFileName[FS_MAX_PATH] = {};
+	fsGetPathFileName(name, tempFileName);
+    if (!mz_zip_writer_add_file(&zip_archive, tempFileName, resourceDirectory, name, "", 0,
                                 ZIP_DEFAULT_COMPRESSION_LEVEL,
                                 ext_attributes)) {
       // Cannot add file to zip_archive
@@ -876,56 +834,34 @@ int zip_create(const char *zipname, const char *filenames[], size_t len) {
   return status;
 }
 
-int zip_extract(const char *zipname, const char *dir,
-                int (*on_extract)(const char *filename, void *arg), void *arg) {
+// CONFFX_CHANGE - Custom File IO
+int zip_extract(const ResourceDirectory resourceDirectory, const char* fileName, const ResourceDirectory dir,
+                int (*on_extract)(const char *path, void *arg), void *arg) {
   int status = -1;
   mz_uint i, n;
-  char path[MAX_PATH + 1];
-  char symlink_to[MAX_PATH + 1];
+  char symlink_to[FS_MAX_PATH + 1];
   mz_zip_archive zip_archive;
   mz_zip_archive_file_stat info;
-  size_t dirlen = 0;
   mz_uint32 xattr = 0;
 
-  memset(path, 0, sizeof(path));
   memset(symlink_to, 0, sizeof(symlink_to));
   if (!memset(&(zip_archive), 0, sizeof(zip_archive))) {
     // Cannot memset zip archive
     return -1;
   }
 
-  if (!zipname || !dir) {
+  if (!strlen(fileName) || !dir) {
     // Cannot parse zip archive name
     return -1;
   }
 
-  dirlen = strlen(dir);
-  if (dirlen + 1 > MAX_PATH) {
-    return -1;
-  }
-
   // Now try to open the archive.
-  if (!mz_zip_reader_init_file(&zip_archive, zipname, 0)) {
+  if (!mz_zip_reader_init_file(&zip_archive, resourceDirectory, fileName, 0)) {
     // Cannot initialize zip_archive reader
     return -1;
   }
 
   memset((void *)&info, 0, sizeof(mz_zip_archive_file_stat));
-
-#if defined(_MSC_VER)
-  strcpy_s(path, MAX_PATH, dir);
-#else
-  strcpy(path, dir);
-#endif
-
-  if (!ISSLASH(path[dirlen - 1])) {
-#if defined(_WIN32) || defined(__WIN32__)
-    path[dirlen] = '\\';
-#else
-    path[dirlen] = '/';
-#endif
-    ++dirlen;
-  }
 
   // Get and print information about each file in the archive.
   n = mz_zip_reader_get_num_files(&zip_archive);
@@ -934,16 +870,9 @@ int zip_extract(const char *zipname, const char *dir,
       // Cannot get information about zip archive;
       goto out;
     }
-#if defined(_MSC_VER)
-    strncpy_s(&path[dirlen], MAX_PATH - dirlen, info.m_filename,
-              MAX_PATH - dirlen);
-#else
-    strncpy(&path[dirlen], info.m_filename, MAX_PATH - dirlen);
-#endif
-    if (mkpath(path) < 0) {
-      // Cannot make a path
-      goto out;
-    }
+
+	char path[FS_MAX_PATH] = {};
+	fsAppendPathComponent(fsGetResourceDirectory(dir), info.m_filename, path);
 
     if ((((info.m_version_made_by >> 8) == 3) ||
          ((info.m_version_made_by >> 8) ==
@@ -955,9 +884,9 @@ int zip_extract(const char *zipname, const char *dir,
 #if defined(_WIN32) || defined(__WIN32__) || defined(_MSC_VER) ||              \
     defined(__MINGW32__)
 #else
-      if (info.m_uncomp_size > MAX_PATH ||
+      if (info.m_uncomp_size > FS_MAX_PATH ||
           !mz_zip_reader_extract_to_mem_no_alloc(&zip_archive, i, symlink_to,
-                                                 MAX_PATH, 0, NULL, 0)) {
+                                                 FS_MAX_PATH, 0, NULL, 0)) {
         goto out;
       }
       symlink_to[info.m_uncomp_size] = '\0';
@@ -967,7 +896,7 @@ int zip_extract(const char *zipname, const char *dir,
 #endif
     } else {
       if (!mz_zip_reader_is_file_a_directory(&zip_archive, i)) {
-        if (!mz_zip_reader_extract_to_file(&zip_archive, i, path, 0)) {
+        if (!mz_zip_reader_extract_to_file(&zip_archive, i, resourceDirectory, path, 0)) {
           // Cannot extract zip archive to file
           goto out;
         }

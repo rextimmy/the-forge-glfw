@@ -7,7 +7,7 @@
 /************************************************************************/
 uint32_t getSystemTime() { return (uint32_t)timeGetTime(); }
 
-uint32_t getTimeSinceStart() { return (uint32_t)time(nullptr); }
+uint32_t getTimeSinceStart() { return (uint32_t)time(NULL); }
 
 static int64_t highResTimerFrequency = 0;
 

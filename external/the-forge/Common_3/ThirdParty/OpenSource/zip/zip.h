@@ -14,6 +14,9 @@
 
 #include <string.h>
 #include <sys/types.h>
+ // CONFFX_CHANGE - Custom File IO
+#include "../../../OS/Interfaces/IFileSystem.h"
+// CONFFX_END
 
 #ifdef __cplusplus
 extern "C" {
@@ -69,7 +72,6 @@ struct zip_t;
 /**
  * Opens zip archive with compression level using the given mode.
  *
- * @param zipname zip archive file name.
  * @param level compression level (0-9 are the standard zlib-style levels).
  * @param mode file access mode.
  *        - 'r': opens a file for reading/extracting (the file must exists).
@@ -78,7 +80,9 @@ struct zip_t;
  *
  * @return the zip archive handler or NULL on error
  */
-extern struct zip_t *zip_open(const char *zipname, int level, char mode);
+// CONFFX_BEGIN - Custom File IO
+extern struct zip_t *zip_open(ResourceDirectory resourceDir, const char* zippath, int level, char mode);
+// CONFFX_END
 
 /**
  * Closes the zip archive, releases resources - always finalize.
@@ -290,13 +294,14 @@ extern int zip_total_entries(struct zip_t *zip);
 /**
  * Creates a new archive and puts files into a single zip archive.
  *
- * @param zipname zip archive file.
+ * @param zippath zip archive file path.
  * @param filenames input files.
  * @param len number of input files.
  *
  * @return the return code - 0 on success, negative number (< 0) on error.
  */
-extern int zip_create(const char *zipname, const char *filenames[], size_t len);
+// CONFFX_CHANGE - Custom File IO
+extern int zip_create(ResourceDirectory resourceDir, const char* zippath, const char *filenames[], size_t len);
 
 /**
  * Extracts a zip archive file into directory.

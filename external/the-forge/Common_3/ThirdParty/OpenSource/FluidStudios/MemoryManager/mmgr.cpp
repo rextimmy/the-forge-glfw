@@ -87,7 +87,7 @@
 #include "../../../../OS/Interfaces/IOperatingSystem.h"
 #include "../../../../OS/Interfaces/ILog.h"
 
-#if !defined(WIN32) && !defined(DURANGO)
+#if !defined(WIN32) && !defined(XBOX)
 #include <unistd.h>
 #endif
 
@@ -167,8 +167,6 @@ static		bool		alwaysWipeAll = true;
 static		bool		cleanupLogOnFirstRun = true;
 static	const	unsigned int	paddingSize = 4;
 #endif
-static		char		mmgrLogFileDirectory[1024] = {};
-static		char		mmgrExecutableName[256] = {};
 
 // ---------------------------------------------------------------------------------------------------------------------------------
 // We define our own assert, because we don't want to bring up an assertion dialog, since that allocates RAM. Our new assert
@@ -191,7 +189,7 @@ extern void debugger(const char *message);
 #define m_assert(x) {}
 #endif
 #else	// Linux uses assert, which we can use safely, since it doesn't bring up a dialog within the program.
-#if defined(ORBIS)
+#if defined(ORBIS) || defined(PROSPERO)
 #ifdef MEMORY_DEBUG
 #define	m_assert(x) if (!(x)) __debugbreak()
 #else
@@ -202,7 +200,7 @@ extern void debugger(const char *message);
 #endif
 #define sprintf_s sprintf
 #define _unlink unlink
-#if !defined(ORBIS)
+#if !defined(ORBIS) && !defined(PROSPERO)
 #define localtime_s localtime_r
 #endif
 #define fopen_s(file,filename,mode) ((*file)=fopen(filename,mode))
@@ -240,7 +238,7 @@ static		unsigned int	releasedPattern = 0xdeadbeef; // Fill pattern for deallocat
 
 static	const	unsigned int	hashSize = 1 << hashBits;
 static	const	char		*allocationTypes[] = { "Unknown",
-"new",     "new[]",  "malloc",   "calloc", "memalign",
+"new",     "new[]",  "malloc",   "calloc",
 "realloc", "delete", "delete[]", "free" };
 static		sAllocUnit	*hashTable[hashSize];
 static		sAllocUnit	*reservoir;
@@ -256,6 +254,7 @@ static const	char		*memoryLogFile = "memory.log";
 static const	char		*memoryLeakLogFile = "memleaks.log";
 static		void		doCleanupLogOnFirstRun();
 char* LogToMemory(char* log);
+const char* mAppName;
 //
 
 // Mutex for different platforms
@@ -472,39 +471,37 @@ static	sAllocUnit	*findAllocUnit(const void *reportedAddress)
 
 // ---------------------------------------------------------------------------------------------------------------------------------
 
-static	size_t	calculateActualSize(const size_t reportedSize, const size_t alignment)
+static	size_t	calculateActualSize(const size_t reportedSize)
 {
 	// We use DWORDS as our padding, and a uint32_t is guaranteed to be 4 bytes, but an int is not (ANSI defines an int as
 	// being the standard word size for a processor; on a 32-bit machine, that's 4 bytes, but on a 64-bit machine, it's
 	// 8 bytes, which means an int can actually be larger than a uint32_t.)
 
-	return reportedSize + paddingSize * sizeof(uint32_t) * 2 + alignment;
+	return reportedSize + paddingSize * sizeof(uint32_t) * 2;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------
 
-static	size_t	calculateReportedSize(const size_t actualSize, const size_t alignment)
-{
-	// We use DWORDS as our padding, and a uint32_t is guaranteed to be 4 bytes, but an int is not (ANSI defines an int as
-	// being the standard word size for a processor; on a 32-bit machine, that's 4 bytes, but on a 64-bit machine, it's
-	// 8 bytes, which means an int can actually be larger than a uint32_t.)
-
-	return actualSize - alignment - paddingSize * sizeof(uint32_t) * 2;
-}
+//static	size_t	calculateReportedSize(const size_t actualSize)
+//{
+//	// We use DWORDS as our padding, and a uint32_t is guaranteed to be 4 bytes, but an int is not (ANSI defines an int as
+//	// being the standard word size for a processor; on a 32-bit machine, that's 4 bytes, but on a 64-bit machine, it's
+//	// 8 bytes, which means an int can actually be larger than a uint32_t.)
+//
+//	return actualSize - paddingSize * sizeof(uint32_t) * 2;
+//}
 
 // ---------------------------------------------------------------------------------------------------------------------------------
 
-static	void	*calculateReportedAddress(const void *actualAddress, const size_t alignment)
+static	void	*calculateReportedAddress(const void *actualAddress)
 {
 	// We allow this...
 
 	if (!actualAddress) return NULL;
 
 	// JUst account for the padding
-	const char* ptr = reinterpret_cast<const char*>(actualAddress) + sizeof(uint32_t) * paddingSize + alignment;
-	assert((alignment & (alignment - 1)) == 0);
-	size_t mask = ~(alignment ? alignment - 1 : (size_t) 0u);
-	return reinterpret_cast<void*>(reinterpret_cast<char*>(((size_t)ptr) & mask));
+
+	return reinterpret_cast<void *>(const_cast<char *>(reinterpret_cast<const char *>(actualAddress) + sizeof(uint32_t) * paddingSize));
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------
@@ -554,8 +551,8 @@ static	void	wipeWithPattern(sAllocUnit *allocUnit, uint32_t pattern, const unsig
 
 	// Write in the prefix/postfix bytes
 
-	uint32_t	*pre = reinterpret_cast<uint32_t *>(reinterpret_cast<char *>(allocUnit->reportedAddress) - paddingSize * sizeof(uint32_t));
-	uint32_t	*post = reinterpret_cast<uint32_t *>(reinterpret_cast<char *>(allocUnit->reportedAddress) + allocUnit->reportedSize);
+	uint32_t	*pre = reinterpret_cast<uint32_t *>(allocUnit->actualAddress);
+	uint32_t	*post = reinterpret_cast<uint32_t *>(reinterpret_cast<char *>(allocUnit->actualAddress) + allocUnit->actualSize - paddingSize * sizeof(uint32_t));
 	for (unsigned int i = 0; i < paddingSize; i++, pre++, post++)
 	{
 		*pre = prefixPattern;
@@ -564,23 +561,26 @@ static	void	wipeWithPattern(sAllocUnit *allocUnit, uint32_t pattern, const unsig
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------
-static void		dumpLine(FILE* fileToWrite, const char* format, ...)
+static void		dumpLine(FileStream* fileToWrite, const char* format, ...)
 {
-    va_list args, fileArgs;
-    va_start(args, format);
-    va_copy(fileArgs, args);
+	static const uint32_t BUFFER_SIZE = 2048;
+	va_list	args;
+	char buffer[BUFFER_SIZE] = {};
+	va_start(args, format);
+	vsprintf_s(buffer, BUFFER_SIZE, format, args);
+	va_end(args);
     
-    _OutputDebugStringV(format, args);
+    _OutputDebugString(buffer);
+	_OutputDebugString("\n");
 	if (fileToWrite != NULL)
 	{
-		vfprintf(fileToWrite, format, fileArgs);
-		fprintf(fileToWrite, "\n");
+		fsWriteToStream(fileToWrite, buffer, strlen(buffer));
+		fsWriteToStream(fileToWrite, "\n", 1);
+		fsFlushStream(fileToWrite);
 	}
-    va_end(args);
-    va_end(fileArgs);
 }
 
-static	void	dumpAllocations(FILE* fh)
+static	void	dumpAllocations(FileStream* fh)
 {
 	dumpLine(fh, "Alloc.        Addr           Size           Addr           Size                        BreakOn BreakOn");
 	dumpLine(fh, "Number      Reported       Reported        Actual         Actual     Unused    Method  Dealloc Realloc  Allocated by");
@@ -617,54 +617,40 @@ static	void	dumpLeakReport()
 
         const char *extension = ".memleaks";
         
-        char outputFileName[256];
-		strncpy(outputFileName, mmgrExecutableName, 256 - strlen(extension));
-        
+		char outputFileName[256] = {};
+		strcpy(outputFileName, mAppName);
+
         // Minimum length check
-        if (outputFileName[0] == 0 || outputFileName[1] == 0) {
+        if (outputFileName[0] == 0 || outputFileName[1] == 0)
+		{
             strcpy(outputFileName, "MemLeaks");
         }
         strcat(outputFileName, extension);
         
-		char logFilePath[1024];
-		strncpy(logFilePath, mmgrLogFileDirectory, 1024 - strlen(outputFileName) - 1);
-#ifdef _WIN32
-		strcat(logFilePath, "\\");
-#else
-		strcat(logFilePath, "/");
-#endif
-		strcat(logFilePath, outputFileName);
-
-		FILE* fh = NULL;
-#ifndef NX64
-		fopen_s(&fh, logFilePath, "w+b");
-#endif
+		FileStream fh = {};
+		bool success = fsOpenStreamFromPath(RD_LOG, outputFileName, FM_WRITE, &fh);
 		
 		/*if (!fh)
 			return;*/
 		// Header
-		static  char    timeString[25];
-		memset(timeString, 0, sizeof(timeString));
 		time_t  t = time(NULL);
 		struct tm tme;
 #ifdef _WIN32
 		localtime_s(&tme, &t);
-#elif defined(ORBIS)
-		localtime_s(&t, &tme);
 #else
 		localtime_s(&t, &tme);
 #endif
-		dumpLine(fh, " ------------------------------------------------------------------------------");
-		dumpLine(fh, "|                Memory leak report for:  %02d/%02d/%04d %02d:%02d:%02d                  |", tme.tm_mon + 1, tme.tm_mday, tme.tm_year + 1900, tme.tm_hour, tme.tm_min, tme.tm_sec);
+		dumpLine(&fh, " ------------------------------------------------------------------------------");
+		dumpLine(&fh, "|                Memory leak report for:  %02d/%02d/%04d %02d:%02d:%02d                  |", tme.tm_mon + 1, tme.tm_mday, tme.tm_year + 1900, tme.tm_hour, tme.tm_min, tme.tm_sec);
 		// use LF instead of CRLF
-		dumpLine(fh, " ------------------------------------------------------------------------------");
+		dumpLine(&fh, " ------------------------------------------------------------------------------");
 		if (stats.totalAllocUnitCount)
 		{
-			dumpLine(fh, "%d memory leak%s found:\n", stats.totalAllocUnitCount, stats.totalAllocUnitCount == 1 ? "" : "s");
+			dumpLine(&fh, "%d memory leak%s found:\n", stats.totalAllocUnitCount, stats.totalAllocUnitCount == 1 ? "" : "s");
 		}
 		else
 		{
-			dumpLine(fh, "Congratulations! No memory leaks found!");
+			dumpLine(&fh, "Congratulations! No memory leaks found!");
 
 			// We can finally free up our own memory allocations
 
@@ -683,43 +669,33 @@ static	void	dumpLeakReport()
 
 		if (stats.totalAllocUnitCount)
 		{
-			dumpAllocations(fh);
+			dumpAllocations(&fh);
 		}
 
 		char* allMemoryLog = log("----All Allocations and Deallocations----");
 
-		dumpLine(fh, allMemoryLog);
+		dumpLine(&fh, allMemoryLog);
 
 		if (!stats.totalAllocUnitCount)
 		{
-			dumpLine(fh, " ------------------------------------------------------------------------------");
-			dumpLine(fh, "Congratulations! No memory leaks found!");
-			dumpLine(fh, " ------------------------------------------------------------------------------");
+			dumpLine(&fh, " ------------------------------------------------------------------------------");
+			dumpLine(&fh, "Congratulations! No memory leaks found!");
+			dumpLine(&fh, " ------------------------------------------------------------------------------");
 		}
-		if (fh)
+		if (success)
 		{
-			fclose(fh);
+			fsCloseStream(&fh);
 		}
 
 		m_assert(stats.totalAllocUnitCount == 0 && "Memory leaks found");
 	}
 }
-
-void mmgrSetLogFileDirectory(const char* directory) 
-{
-	strncpy(mmgrLogFileDirectory, directory, sizeof(mmgrLogFileDirectory) / sizeof(char));
-}
-
-void mmgrSetExecutableName(const char* name, size_t length) 
-{
-	strncpy(mmgrExecutableName, name, min(sizeof(mmgrExecutableName) / sizeof(char), length));
-}
-
 // ---------------------------------------------------------------------------------------------------------------------------------
 // We use a static class to let us know when we're in the midst of static deinitialization
 // ---------------------------------------------------------------------------------------------------------------------------------
-bool MemAllocInit()
+bool MemAllocInit(const char* appName)
 {
+	mAppName = appName;
 	doCleanupLogOnFirstRun();
 	return true;
 }
@@ -897,6 +873,9 @@ void	*mmgrAllocator(const char *sourceFile, const unsigned int sourceLine, const
     reportedSize += sizeof(uint32_t) - 1;
     reportedSize &= ~(sizeof(uint32_t) - 1);
 
+	// Make sure alignment is valid
+	alignment = !alignment ? sizeof(void*) : alignment;
+
 	//if (!allocMutex)
 	//	allocMutex = CreateMutex();
 	//
@@ -968,7 +947,7 @@ void	*mmgrAllocator(const char *sourceFile, const unsigned int sourceLine, const
 		// Populate it with some real data
 
 		memset(au, 0, sizeof(sAllocUnit));
-		au->actualSize = calculateActualSize(reportedSize, alignment);
+		au->actualSize = calculateActualSize(reportedSize) + alignment;
 #ifdef RANDOM_FAILURE
 		double	a = rand();
 		double	b = RAND_MAX / 100.0 * RANDOM_FAILURE;
@@ -985,10 +964,20 @@ void	*mmgrAllocator(const char *sourceFile, const unsigned int sourceLine, const
 		au->actualAddress = malloc(au->actualSize);
 #endif
 		au->reportedSize = reportedSize;
-		au->reportedAddress = calculateReportedAddress(au->actualAddress, alignment);
+		au->reportedAddress = calculateReportedAddress(au->actualAddress);
+		au->alignment = alignment;
 		au->allocationType = allocationType;
 		au->sourceLine = sourceLine;
 		au->allocationNumber = currentAllocationCount;
+
+		// Make sure the address we return to user is aligned to the specified alignment
+		size_t offset = ((size_t)au->reportedAddress) % alignment;
+		if (offset)
+		{
+			au->reportedAddress = (uint8_t*)au->reportedAddress + (alignment - offset);
+		}
+
+		au->offset = offset;
 
 		if (sourceFile) strncpy_s(au->sourceFile, sourceFileStripper(sourceFile), sizeof(au->sourceFile) - 1);
 		else		strcpy_s(au->sourceFile, 2, "??");
@@ -1094,7 +1083,7 @@ void	*mmgrReallocator(const char *sourceFile, const unsigned int sourceLine, con
 		if (!reportedAddress)
 		{
 			MUTEX_UNLOCK(allocMutex);
-			return mmgrAllocator(sourceFile, sourceLine, sourceFunc, reallocationType, 0, reportedSize);
+			return mmgrAllocator(sourceFile, sourceLine, sourceFunc, reallocationType, sizeof(void*), reportedSize);
 		}
 
 		// Increase our allocation count
@@ -1111,6 +1100,8 @@ void	*mmgrReallocator(const char *sourceFile, const unsigned int sourceLine, con
 		// Locate the existing allocation unit
 
 		sAllocUnit	*au = findAllocUnit(reportedAddress);
+		const size_t alignment = au->alignment;
+		const size_t oldReportedSize = au->reportedSize;
 
 		// If you hit this assert, you tried to reallocate RAM that wasn't allocated by this memory manager.
 		m_assert(au != NULL);
@@ -1132,8 +1123,7 @@ void	*mmgrReallocator(const char *sourceFile, const unsigned int sourceLine, con
 		// realloc. In other words, you have a allocation/reallocation mismatch.
 		m_assert(au->allocationType == m_alloc_malloc ||
 			au->allocationType == m_alloc_calloc ||
-			au->allocationType == m_alloc_realloc ||
-			au->allocationType == m_alloc_memalign);
+			au->allocationType == m_alloc_realloc);
 
 		// If you hit this assert, then the "break on realloc" flag for this allocation unit is set (and will continue to be
 		// set until you specifically shut it off. Interrogate the 'au' variable to determine information about this
@@ -1149,8 +1139,15 @@ void	*mmgrReallocator(const char *sourceFile, const unsigned int sourceLine, con
 		// Do the reallocation
 
 		void	*oldReportedAddress = reportedAddress;
-		size_t	newActualSize = calculateActualSize(reportedSize, 0);
+		size_t	newActualSize = calculateActualSize(reportedSize) + alignment;
 		void	*newActualAddress = NULL;
+
+		// We need copy of old data in case the address we get from realloc has different alignment
+		// This would mean reportedAddress points to a different offset in memory
+		// Another solution is using memmove
+		void	*oldData = malloc(min(oldReportedSize, reportedSize));
+		memcpy(oldData, oldReportedAddress, min(oldReportedSize, reportedSize));
+
 #ifdef RANDOM_FAILURE
 		double	a = rand();
 		double	b = RAND_MAX / 100.0 * RANDOM_FAILURE;
@@ -1190,11 +1187,29 @@ void	*mmgrReallocator(const char *sourceFile, const unsigned int sourceLine, con
 
 		au->actualSize = newActualSize;
 		au->actualAddress = newActualAddress;
-		au->reportedSize = calculateReportedSize(newActualSize, 0);
-		au->reportedAddress = calculateReportedAddress(newActualAddress, 0);
+		au->reportedSize = reportedSize;
+		au->reportedAddress = calculateReportedAddress(newActualAddress);
 		au->allocationType = reallocationType;
 		au->sourceLine = sourceLine;
 		au->allocationNumber = currentAllocationCount;
+
+		// Make sure the address we return to user is aligned to the specified alignment
+		size_t offset = ((size_t)au->reportedAddress) % alignment;
+		if (offset)
+		{
+			au->reportedAddress = (uint8_t*)au->reportedAddress + (alignment - offset);
+		}
+
+		// Case where the new address has different alignment in which case we need to copy the old data as to respect realloc guarantees
+		if (offset != au->offset)
+		{
+			// Copy old data
+			memcpy(au->reportedAddress, oldData, min(oldReportedSize, reportedSize));
+			au->offset = offset;
+		}
+
+		free(oldData);
+
 		if (sourceFile) strncpy_s(au->sourceFile, sourceFileStripper(sourceFile), sizeof(au->sourceFile) - 1);
 		else		strcpy_s(au->sourceFile, 2, "??");
 		if (sourceFunc) strncpy_s(au->sourceFunc, sourceFunc, sizeof(au->sourceFunc) - 1);
@@ -1206,7 +1221,6 @@ void	*mmgrReallocator(const char *sourceFile, const unsigned int sourceLine, con
 		if (oldReportedAddress != au->reportedAddress)
 		{
 			// Remove this allocation unit from the hash table
-
 			{
 				size_t	hashIndex = (reinterpret_cast<size_t>(oldReportedAddress) >> 4) & (hashSize - 1);
 				if (hashTable[hashIndex] == au)
@@ -1326,7 +1340,6 @@ void	mmgrDeallocator(const char *sourceFile, const unsigned int sourceLine, cons
 				(deallocationType == m_alloc_free         && au->allocationType == m_alloc_malloc) ||
 				(deallocationType == m_alloc_free         && au->allocationType == m_alloc_calloc) ||
 				(deallocationType == m_alloc_free         && au->allocationType == m_alloc_realloc) ||
-				(deallocationType == m_alloc_free         && au->allocationType == m_alloc_memalign) ||
 				(deallocationType == m_alloc_unknown));
 
 			// If you hit this assert, then the "break on dealloc" flag for this allocation unit is set. Interrogate the 'au'
@@ -1401,8 +1414,8 @@ bool	mmgrValidateAllocUnit(const sAllocUnit *allocUnit)
 {
 	// Make sure the padding is untouched
 
-	uint32_t	*pre = reinterpret_cast<uint32_t *>(reinterpret_cast<char *>(allocUnit->reportedAddress) - paddingSize * sizeof(uint32_t));
-	uint32_t	*post = reinterpret_cast<uint32_t *>(reinterpret_cast<char *>(allocUnit->reportedAddress) + allocUnit->reportedSize);
+	uint32_t	*pre = reinterpret_cast<uint32_t *>(allocUnit->actualAddress);
+	uint32_t	*post = reinterpret_cast<uint32_t *>((char *)allocUnit->actualAddress + allocUnit->actualSize - paddingSize * sizeof(uint32_t));
 	bool	errorFlag = false;
 	for (unsigned int i = 0; i < paddingSize; i++, pre++, post++)
 	{
@@ -1536,28 +1549,26 @@ void	mmgrDumpAllocUnit(const sAllocUnit *allocUnit, const char *prefix)
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------
+static void fsPrintf(FileStream* fileStream, const char* format, ...)
+{
+	static const uint32_t BUFFER_SIZE = 2048;
+	va_list	args;
+	char buffer[BUFFER_SIZE] = {};
+	va_start(args, format);
+	vsprintf_s(buffer, BUFFER_SIZE, format, args);
+	va_end(args);
+	fsWriteToStream(fileStream, buffer, strlen(buffer));
+}
 
 void	mmgrDumpMemoryReport(const char *filename, const bool overwrite)
 {
 	{
-		char filePath[1024];
-		strncpy(filePath, mmgrLogFileDirectory, sizeof(mmgrLogFileDirectory) / sizeof(char));
-		strcat(filePath, filename);
-
-		FILE* fh = nullptr;
-
-		if (overwrite)
-		{ 
-            fopen_s(&fh, filePath, "w+b");
-		}
-		else
-		{ 
-            fopen_s(&fh, filePath, "a+b");
-		}
+		FileStream fh = {};
+		bool success = fsOpenStreamFromPath(RD_LOG, filename, overwrite ? FM_WRITE : FM_APPEND, &fh);
 
 		// If you hit this assert, then the memory report generator is unable to log information to a file (can't open the file for
 		// some reason.)
-		if (!fh)
+		if (!success)
 			return;
 
 		// Header
@@ -1571,47 +1582,47 @@ void	mmgrDumpMemoryReport(const char *filename, const bool overwrite)
 		localtime_s(&t, &tme);
 #endif
 		
-        fprintf(fh, " ----------------------------------------------------------------------------------------------------------------------------------\n");
-        fprintf(fh, "|                                             Memory report for: %02d/%02d/%04d %02d:%02d:%02d                                          |\n", tme.tm_mon + 1, tme.tm_mday, tme.tm_year + 1900, tme.tm_hour, tme.tm_min, tme.tm_sec);
-		fprintf(fh, " ----------------------------------------------------------------------------------------------------------------------------------\n");
-		fprintf(fh, "\n");
+        fsPrintf(&fh, " ----------------------------------------------------------------------------------------------------------------------------------\n");
+        fsPrintf(&fh, "|                                             Memory report for: %02d/%02d/%04d %02d:%02d:%02d                                          |\n", tme.tm_mon + 1, tme.tm_mday, tme.tm_year + 1900, tme.tm_hour, tme.tm_min, tme.tm_sec);
+		fsPrintf(&fh, " ----------------------------------------------------------------------------------------------------------------------------------\n");
+		fsPrintf(&fh, "\n");
 
 	// Report summary
-		fprintf(fh, " ---------------------------------------------------------------------------------------------------------------------------------- \n");
-        fprintf(fh, "|                                                           T O T A L S                                                            |\n");
-        fprintf(fh, " ---------------------------------------------------------------------------------------------------------------------------------- \n");
-        fprintf(fh, "              Allocation unit count: %10s\n", insertCommas(stats.totalAllocUnitCount));
-        fprintf(fh, "            Reported to application: %s\n", memorySizeString(stats.totalReportedMemory));
-        fprintf(fh, "         Actual total memory in use: %s\n", memorySizeString(stats.totalActualMemory));
-        fprintf(fh, "           Memory tracking overhead: %s\n", memorySizeString(stats.totalActualMemory - stats.totalReportedMemory));
-        fprintf(fh, "\n");
+		fsPrintf(&fh, " ---------------------------------------------------------------------------------------------------------------------------------- \n");
+        fsPrintf(&fh, "|                                                           T O T A L S                                                            |\n");
+        fsPrintf(&fh, " ---------------------------------------------------------------------------------------------------------------------------------- \n");
+        fsPrintf(&fh, "              Allocation unit count: %10s\n", insertCommas(stats.totalAllocUnitCount));
+        fsPrintf(&fh, "            Reported to application: %s\n", memorySizeString(stats.totalReportedMemory));
+        fsPrintf(&fh, "         Actual total memory in use: %s\n", memorySizeString(stats.totalActualMemory));
+        fsPrintf(&fh, "           Memory tracking overhead: %s\n", memorySizeString(stats.totalActualMemory - stats.totalReportedMemory));
+        fsPrintf(&fh, "\n");
 
-		fprintf(fh, " ---------------------------------------------------------------------------------------------------------------------------------- \n");
-		fprintf(fh, "|                                                            P E A K S                                                             |\n");
-		fprintf(fh, " ---------------------------------------------------------------------------------------------------------------------------------- \n");
-		fprintf(fh, "              Allocation unit count: %10s\n", insertCommas(stats.peakAllocUnitCount));
-		fprintf(fh, "            Reported to application: %s\n", memorySizeString(stats.peakReportedMemory));
-		fprintf(fh, "                             Actual: %s\n", memorySizeString(stats.peakActualMemory));
-		fprintf(fh, "           Memory tracking overhead: %s\n", memorySizeString(stats.peakActualMemory - stats.peakReportedMemory));
-		fprintf(fh, "\n");
+		fsPrintf(&fh, " ---------------------------------------------------------------------------------------------------------------------------------- \n");
+		fsPrintf(&fh, "|                                                            P E A K S                                                             |\n");
+		fsPrintf(&fh, " ---------------------------------------------------------------------------------------------------------------------------------- \n");
+		fsPrintf(&fh, "              Allocation unit count: %10s\n", insertCommas(stats.peakAllocUnitCount));
+		fsPrintf(&fh, "            Reported to application: %s\n", memorySizeString(stats.peakReportedMemory));
+		fsPrintf(&fh, "                             Actual: %s\n", memorySizeString(stats.peakActualMemory));
+		fsPrintf(&fh, "           Memory tracking overhead: %s\n", memorySizeString(stats.peakActualMemory - stats.peakReportedMemory));
+		fsPrintf(&fh, "\n");
 
-		fprintf(fh, " ---------------------------------------------------------------------------------------------------------------------------------- \n");
-		fprintf(fh, "|                                                      A C C U M U L A T E D                                                       |\n");
-		fprintf(fh, " ---------------------------------------------------------------------------------------------------------------------------------- \n");
-		fprintf(fh, "              Allocation unit count: %s\n", memorySizeString(stats.accumulatedAllocUnitCount));
-		fprintf(fh, "            Reported to application: %s\n", memorySizeString(stats.accumulatedReportedMemory));
-		fprintf(fh, "                             Actual: %s\n", memorySizeString(stats.accumulatedActualMemory));
-		fprintf(fh, "\n");
+		fsPrintf(&fh, " ---------------------------------------------------------------------------------------------------------------------------------- \n");
+		fsPrintf(&fh, "|                                                      A C C U M U L A T E D                                                       |\n");
+		fsPrintf(&fh, " ---------------------------------------------------------------------------------------------------------------------------------- \n");
+		fsPrintf(&fh, "              Allocation unit count: %s\n", memorySizeString(stats.accumulatedAllocUnitCount));
+		fsPrintf(&fh, "            Reported to application: %s\n", memorySizeString(stats.accumulatedReportedMemory));
+		fsPrintf(&fh, "                             Actual: %s\n", memorySizeString(stats.accumulatedActualMemory));
+		fsPrintf(&fh, "\n");
 
-		fprintf(fh, " ---------------------------------------------------------------------------------------------------------------------------------- \n");
-		fprintf(fh, "|                                                           U N U S E D                                                            |\n");
-		fprintf(fh, " ---------------------------------------------------------------------------------------------------------------------------------- \n");
-        fprintf(fh, "Memory allocated but not in use: %s\n", memorySizeString(mmgrCalcAllUnused()));
-		fprintf(fh, "\n");
+		fsPrintf(&fh, " ---------------------------------------------------------------------------------------------------------------------------------- \n");
+		fsPrintf(&fh, "|                                                           U N U S E D                                                            |\n");
+		fsPrintf(&fh, " ---------------------------------------------------------------------------------------------------------------------------------- \n");
+        fsPrintf(&fh, "Memory allocated but not in use: %s\n", memorySizeString(mmgrCalcAllUnused()));
+		fsPrintf(&fh, "\n");
 
-		dumpAllocations(fh);
+		dumpAllocations(&fh);
 
-        fclose(fh);
+        fsCloseStream(&fh);
 	}
 }
 

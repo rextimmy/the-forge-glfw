@@ -30,7 +30,7 @@
 //For getting rid of unreferenced parameter warnings
 #ifdef _MSC_VER    //If on Visual Studio
 #define UNREF_PARAM(x) (x)
-#elif defined(ORBIS)
+#elif defined(ORBIS) || defined(PROSPERO)
 #define UNREF_PARAM(x) ((void)(x))
 #elif defined(__APPLE__)
 #define UNREF_PARAM(x) ((void)(x))
@@ -58,7 +58,7 @@
 #else
 #if defined(_WIN32)
 #define DEFINE_ALIGNED(def, a) __declspec(align(a)) def
-#elif defined(__OSX__)
+#elif defined(__APPLE__)
 #define DEFINE_ALIGNED(def, a) def __attribute__((aligned(a)))
 #else
 //If we haven't specified the platform here, we fallback on the C++11 and C11 keyword for aligning
@@ -66,6 +66,27 @@
 //Worst case -> No platform specific align defined -> this one also doesn't work and fails to compile -> add a platform specific one :)
 #define DEFINE_ALIGNED(def, a) alignas(a) def
 #endif
+#endif
+
+#ifdef __APPLE__
+#define NOREFS __unsafe_unretained
+#endif
+
+#ifdef _WIN32
+#define FORGE_CALLCONV __cdecl
+#else
+#define FORGE_CALLCONV
+#endif
+
+#ifdef __cplusplus
+#define FORGE_CONSTEXPR constexpr
+#else
+#define FORGE_CONSTEXPR
+#endif
+
+#if defined(_MSC_VER) && !defined(NX64)
+#include <BaseTsd.h>
+typedef SSIZE_T ssize_t;
 #endif
 
 // Generates a compile error if the expression evaluates to false

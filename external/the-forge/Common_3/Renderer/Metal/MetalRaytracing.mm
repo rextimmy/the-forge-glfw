@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018 Confetti Interactive Inc.
+ * Copyright (c) 2018 The Forge Interactive Inc.
  *
  * This file is part of The-Forge
  * (see https://github.com/ConfettiFX/The-Forge).
@@ -35,6 +35,7 @@
 #if !defined(__APPLE__) && !defined(TARGET_OS_MAC)
 #error "MacOs is needed!"
 #endif
+
 #import <simd/simd.h>
 #import <MetalKit/MetalKit.h>
 #import <MetalPerformanceShaders/MetalPerformanceShaders.h>
@@ -48,6 +49,8 @@
 #include "../../../Middleware_3/ParallelPrimitives/ParallelPrimitives.h"
 #include "../../OS/Interfaces/ILog.h"
 #include "../../OS/Interfaces/IMemory.h"
+
+#if defined(ENABLE_RAYTRACING)
 
 extern void util_barrier_required(Cmd* pCmd, const QueueType& encoderType);
 
@@ -220,9 +223,9 @@ kernel void classifyIntersections(constant ClassifyIntersectionsArguments& argum
 #define THREADS_PER_THREADGROUP 64
 
 extern void mtl_createShaderReflection(Renderer* pRenderer, Shader* shader, const uint8_t* shaderCode, uint32_t shaderSize, ShaderStage shaderStage, eastl::unordered_map<uint32_t, MTLVertexFormat>* vertexAttributeFormats, ShaderReflection* pOutReflection);
-extern void add_texture(Renderer* pRenderer, const TextureDesc* pDesc, Texture** pTexture, const bool isRT = false, const bool forceNonPrivate = false);
+extern void add_texture(Renderer* pRenderer, const TextureDesc* pDesc, Texture** pTexture, const bool isRT);
 
-struct AccelerationStructure
+struct API_AVAILABLE(macos(10.14), ios(12.0)) AccelerationStructure
 {
 	MPSAccelerationStructureGroup* pSharedGroup;
 	NSMutableArray<MPSTriangleAccelerationStructure*>* pBottomAS;
@@ -278,7 +281,7 @@ struct HitGroupShaders {
 	int16_t closestHit;
 };
 
-struct RaytracingPipeline
+struct API_AVAILABLE(macos(10.14), ios(12.0)) RaytracingPipeline
 {
 	NSMutableArray<id <MTLComputePipelineState> >*  mMetalPipelines; // Element 0 is always the ray pipeline.
 	HitGroupShaders*	pHitGroupShaders; // Into mMetalPipelines.
@@ -322,9 +325,10 @@ bool isRaytracingSupported(Renderer* pRenderer)
 	return true;
 }
 
+API_AVAILABLE(macos(10.14), ios(12.0))
 bool initRaytracing(Renderer* pRenderer, Raytracing** ppRaytracing)
 {
-	Raytracing* pRaytracing = conf_new(Raytracing);
+	Raytracing* pRaytracing = tf_new(Raytracing);
 	// Create a raytracer for our Metal device
 	pRaytracing->pIntersector = [[MPSRayIntersector alloc] initWithDevice: pRenderer->pDevice];
 	
@@ -334,7 +338,7 @@ bool initRaytracing(Renderer* pRenderer, Raytracing** ppRaytracing)
 	pRaytracing->pIntersector.rayMaskOptions = MPSRayMaskOptionPrimitive;
 	pRaytracing->pRenderer = pRenderer;
 	
-	pRaytracing->pParallelPrimitives = conf_new(ParallelPrimitives, pRenderer);
+	pRaytracing->pParallelPrimitives = tf_new(ParallelPrimitives, pRenderer);
 	
 	NSString* classificationShaderSource = [NSString stringWithUTF8String:pClassificationShader];
 	NSError* error = nil;
@@ -356,17 +360,16 @@ void computeBuffersSize(const AccelerationStructureDescTop* pDesc, unsigned* pVb
 	unsigned vbSize = 0;
 	unsigned ibSize = 0;
 	unsigned mskSize = 0;
-	for (unsigned i = 0; i < pDesc->mBottomASDescsCount; ++i)
 	{
-		for (unsigned idesc = 0; idesc < pDesc->mBottomASDescs[i].mDescCount; ++idesc)
+		for (unsigned idesc = 0; idesc < pDesc->mBottomASDesc->mDescCount; ++idesc)
 		{
-			vbSize += pDesc->mBottomASDescs[i].pGeometryDescs[idesc].vertexCount * sizeof(float3);
-			ibSize += pDesc->mBottomASDescs[i].pGeometryDescs[idesc].indicesCount * indexSize;
+			vbSize += pDesc->mBottomASDesc->pGeometryDescs[idesc].mVertexCount * sizeof(float3);
+			ibSize += pDesc->mBottomASDesc->pGeometryDescs[idesc].mIndexCount * indexSize;
 			
-			if (pDesc->mBottomASDescs[i].pGeometryDescs[idesc].indicesCount > 0)
-				mskSize += (pDesc->mBottomASDescs[i].pGeometryDescs[idesc].indicesCount / 3) * sizeof(uint32_t);
+			if (pDesc->mBottomASDesc->pGeometryDescs[idesc].mIndexCount > 0)
+				mskSize += (pDesc->mBottomASDesc->pGeometryDescs[idesc].mIndexCount / 3) * sizeof(uint32_t);
 			else
-				mskSize += (pDesc->mBottomASDescs[i].pGeometryDescs[idesc].vertexCount / 3) * sizeof(uint32_t);
+				mskSize += (pDesc->mBottomASDesc->pGeometryDescs[idesc].mVertexCount / 3) * sizeof(uint32_t);
 		}
 	}
 	if (pVbSize != NULL)
@@ -403,10 +406,8 @@ void copyIndices(T1* dst, T2* src, unsigned count, unsigned baseOffset)
 
 void createVertexAndIndexBuffers(Raytracing* pRaytracing, const AccelerationStructureDescTop* pDesc,
 								 Buffer** pVb, Buffer** pIb,
-								 eastl::vector<ASOffset>& outOffsets)
+								 ASOffset* pOutOffset)
 {
-	outOffsets.resize(pDesc->mBottomASDescsCount);
-
 	unsigned vbSize = 0, ibSize = 0, mskSize = 0;
 	computeBuffersSize(pDesc, &vbSize, &ibSize, &mskSize);
 	
@@ -415,7 +416,7 @@ void createVertexAndIndexBuffers(Raytracing* pRaytracing, const AccelerationStru
 	vbDesc.mDesc.mSize = vbSize;
 	vbDesc.mDesc.mMemoryUsage = RESOURCE_MEMORY_USAGE_GPU_ONLY;
 	vbDesc.ppBuffer = pVb;
-	addResource(&vbDesc, NULL, LOAD_PRIORITY_NORMAL);
+	addResource(&vbDesc, NULL);
 	
 	unsigned vbOffset = 0;
 	unsigned ibOffset = 0;
@@ -433,61 +434,60 @@ void createVertexAndIndexBuffers(Raytracing* pRaytracing, const AccelerationStru
 		ibDesc.mDesc.mSize = ibSize;
 		ibDesc.mDesc.mMemoryUsage = RESOURCE_MEMORY_USAGE_GPU_ONLY;
 		ibDesc.ppBuffer = pIb;
-		addResource(&ibDesc, NULL, LOAD_PRIORITY_NORMAL);
+		addResource(&ibDesc, NULL);
 		
 		ibUpdateDesc = { *pIb };
 		beginUpdateResource(&ibUpdateDesc);
 		ibDstPtr = static_cast<uint8_t*>(ibUpdateDesc.pMappedData);
 	}
 	
-	for (unsigned i = 0; i < pDesc->mBottomASDescsCount; ++i)
 	{
-		ASOffset& asoffset = outOffsets[i];
-		asoffset.vbGeometriesOffsets.resize(pDesc->mBottomASDescs[i].mDescCount);
-		asoffset.ibGeometriesOffsets.resize(pDesc->mBottomASDescs[i].mDescCount);
+		ASOffset& asoffset = *pOutOffset;
+		asoffset.vbGeometriesOffsets.resize(pDesc->mBottomASDesc->mDescCount);
+		asoffset.ibGeometriesOffsets.resize(pDesc->mBottomASDesc->mDescCount);
 		asoffset.vbSize = 0;
 		asoffset.ibSize = 0;
 		asoffset.trianglesCount = 0;
 		asoffset.vertexStride = sizeof(float3);
-		for (unsigned j = 0; j < pDesc->mBottomASDescs[i].mDescCount; ++j)
+		for (unsigned j = 0; j < pDesc->mBottomASDesc->mDescCount; ++j)
 		{
 			asoffset.vbGeometriesOffsets[j] = vbOffset;
 			asoffset.ibGeometriesOffsets[j] = ibOffset;
 			
 			// Copy vertex data into buffers
 			memcpy(&vbDstPtr[vbOffset],
-				   pDesc->mBottomASDescs[i].pGeometryDescs[j].pVertexArray,
-				   pDesc->mBottomASDescs[i].pGeometryDescs[j].vertexCount * sizeof(float3));
-			vbOffset += pDesc->mBottomASDescs[i].pGeometryDescs[j].vertexCount * sizeof(float3);
-			asoffset.vbSize += pDesc->mBottomASDescs[i].pGeometryDescs[j].vertexCount * sizeof(float3);
+				   pDesc->mBottomASDesc->pGeometryDescs[j].pVertexArray,
+				   pDesc->mBottomASDesc->pGeometryDescs[j].mVertexCount * sizeof(float3));
+			vbOffset += pDesc->mBottomASDesc->pGeometryDescs[j].mVertexCount * sizeof(float3);
+			asoffset.vbSize += pDesc->mBottomASDesc->pGeometryDescs[j].mVertexCount * sizeof(float3);
 			
 			if (ibDstPtr != NULL)
 			{
 				unsigned indexSize = (pDesc->mIndexType == INDEX_TYPE_UINT16 ? 2 : 4);
-				if (pDesc->mBottomASDescs[i].pGeometryDescs[j].indexType == INDEX_TYPE_UINT16)
+				if (pDesc->mBottomASDesc->pGeometryDescs[j].mIndexType == INDEX_TYPE_UINT16)
 				{
 					if (pDesc->mIndexType == INDEX_TYPE_UINT16)
 						copyIndices<uint16_t, uint16_t>((uint16_t*)&ibDstPtr[ibOffset],
-														pDesc->mBottomASDescs[i].pGeometryDescs[j].pIndices16,
-														pDesc->mBottomASDescs[i].pGeometryDescs[j].indicesCount,
+														pDesc->mBottomASDesc->pGeometryDescs[j].pIndices16,
+														pDesc->mBottomASDesc->pGeometryDescs[j].mIndexCount,
 														vertexOffset);
 					else
 						copyIndices<uint16_t, uint32_t>((uint16_t*)&ibDstPtr[ibOffset],
-														pDesc->mBottomASDescs[i].pGeometryDescs[j].pIndices32,
-														pDesc->mBottomASDescs[i].pGeometryDescs[j].indicesCount,
+														pDesc->mBottomASDesc->pGeometryDescs[j].pIndices32,
+														pDesc->mBottomASDesc->pGeometryDescs[j].mIndexCount,
 														vertexOffset);
 				}
-				else if (pDesc->mBottomASDescs[i].pGeometryDescs[j].indexType == INDEX_TYPE_UINT32)
+				else if (pDesc->mBottomASDesc->pGeometryDescs[j].mIndexType == INDEX_TYPE_UINT32)
 				{
 					if (pDesc->mIndexType == INDEX_TYPE_UINT16)
 						copyIndices<uint32_t, uint16_t>((uint32_t*)&ibDstPtr[ibOffset],
-														pDesc->mBottomASDescs[i].pGeometryDescs[j].pIndices16,
-														pDesc->mBottomASDescs[i].pGeometryDescs[j].indicesCount,
+														pDesc->mBottomASDesc->pGeometryDescs[j].pIndices16,
+														pDesc->mBottomASDesc->pGeometryDescs[j].mIndexCount,
 														vertexOffset);
 					else
 						copyIndices<uint32_t, uint32_t>((uint32_t*)&ibDstPtr[ibOffset],
-														pDesc->mBottomASDescs[i].pGeometryDescs[j].pIndices32,
-														pDesc->mBottomASDescs[i].pGeometryDescs[j].indicesCount,
+														pDesc->mBottomASDesc->pGeometryDescs[j].pIndices32,
+														pDesc->mBottomASDesc->pGeometryDescs[j].mIndexCount,
 														vertexOffset);
 				}
 				else
@@ -495,14 +495,14 @@ void createVertexAndIndexBuffers(Raytracing* pRaytracing, const AccelerationStru
 					ASSERT(false && "New index type was introduced!?");
 				}
 				
-				ibOffset += pDesc->mBottomASDescs[i].pGeometryDescs[j].indicesCount * indexSize;
-				asoffset.ibSize += pDesc->mBottomASDescs[i].pGeometryDescs[j].indicesCount * indexSize;
-				asoffset.trianglesCount += pDesc->mBottomASDescs[i].pGeometryDescs[j].indicesCount / 3;
+				ibOffset += pDesc->mBottomASDesc->pGeometryDescs[j].mIndexCount * indexSize;
+				asoffset.ibSize += pDesc->mBottomASDesc->pGeometryDescs[j].mIndexCount * indexSize;
+				asoffset.trianglesCount += pDesc->mBottomASDesc->pGeometryDescs[j].mIndexCount / 3;
 			} else
 			{
-				asoffset.trianglesCount += pDesc->mBottomASDescs[i].pGeometryDescs[j].vertexCount / 3;
+				asoffset.trianglesCount += pDesc->mBottomASDesc->pGeometryDescs[j].mVertexCount / 3;
 			}
-			vertexOffset += pDesc->mBottomASDescs[i].pGeometryDescs[j].vertexCount;
+			vertexOffset += pDesc->mBottomASDesc->pGeometryDescs[j].mVertexCount;
 		}
 	}
 	
@@ -522,7 +522,7 @@ void createInstanceIDBuffer(Raytracing* pRaytracing, const AccelerationStructure
 	bufferDesc.mDesc.mSize = bufferSize;
 	bufferDesc.mDesc.mMemoryUsage = RESOURCE_MEMORY_USAGE_GPU_ONLY;
 	bufferDesc.ppBuffer = pBuffer;
-	addResource(&bufferDesc, NULL, LOAD_PRIORITY_NORMAL);
+	addResource(&bufferDesc, NULL);
 	
 	BufferUpdateDesc updateDesc = { *pBuffer };
 	beginUpdateResource(&updateDesc);
@@ -604,7 +604,7 @@ void createInstancesMaskBuffer(Raytracing* pRaytracing, const AccelerationStruct
 	maskDesc.mDesc.mSize = instanceBufferLength;
 	maskDesc.mDesc.mMemoryUsage = RESOURCE_MEMORY_USAGE_GPU_ONLY;
 	maskDesc.ppBuffer = pMask;
-	addResource(&maskDesc, NULL, LOAD_PRIORITY_NORMAL);
+	addResource(&maskDesc, NULL);
 	
 	BufferUpdateDesc maskUpdateDesc = { *pMask };
 	beginUpdateResource(&maskUpdateDesc);
@@ -626,7 +626,7 @@ void createHitGroupIndicesBuffer (Raytracing* pRaytracing, const AccelerationStr
 	bufferDesc.mDesc.mSize = instanceBufferLength;
 	bufferDesc.mDesc.mMemoryUsage = RESOURCE_MEMORY_USAGE_GPU_ONLY;
 	bufferDesc.ppBuffer = pBuffer;
-	addResource(&bufferDesc, NULL, LOAD_PRIORITY_NORMAL);
+	addResource(&bufferDesc, NULL);
 	
 	BufferUpdateDesc updateDesc = { *pBuffer };
 	beginUpdateResource(&updateDesc);
@@ -640,6 +640,7 @@ void createHitGroupIndicesBuffer (Raytracing* pRaytracing, const AccelerationStr
 
 //////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////
+API_AVAILABLE(macos(10.14), ios(12.0))
 void addAccelerationStructure(Raytracing* pRaytracing, const AccelerationStructureDescTop* pDesc, AccelerationStructure** ppAccelerationStructure)
 {
 	ASSERT(pRaytracing);
@@ -647,18 +648,18 @@ void addAccelerationStructure(Raytracing* pRaytracing, const AccelerationStructu
 	ASSERT(pRaytracing->pIntersector);
 	ASSERT(ppAccelerationStructure);
 	
-	AccelerationStructure* AS = (AccelerationStructure*)conf_malloc(sizeof(AccelerationStructure));
+	AccelerationStructure* AS = (AccelerationStructure*)tf_malloc(sizeof(AccelerationStructure));
 	memset(AS, 0, sizeof(*AS));
-	conf_placement_new<eastl::vector<uint32_t> >(&AS->mActiveHitGroups);
+	tf_placement_new<eastl::vector<uint32_t> >(&AS->mActiveHitGroups);
 	AS->pBottomAS = [[NSMutableArray alloc] init];
 	
 	//pDesc->mFlags. Just ignore this
 	Buffer* _vertexPositionBuffer = NULL;
 	Buffer* _indexBuffer = NULL;
-	eastl::vector<ASOffset> offsets;
+	ASOffset offset = {};
 	
 	//copy vertices and indices to buffer
-	createVertexAndIndexBuffers(pRaytracing, pDesc, &_vertexPositionBuffer, &_indexBuffer, offsets);
+	createVertexAndIndexBuffers(pRaytracing, pDesc, &_vertexPositionBuffer, &_indexBuffer, &offset);
 	
 	MPSAccelerationStructureGroup* group = [[MPSAccelerationStructureGroup alloc] initWithDevice:pRaytracing->pRenderer->pDevice];
 	AS->pSharedGroup = group;
@@ -667,7 +668,7 @@ void addAccelerationStructure(Raytracing* pRaytracing, const AccelerationStructu
 	AS->mIndexBuffer = _indexBuffer;
 	AS->mVertexPositionBuffer = _vertexPositionBuffer;
 	createHitGroupIndicesBuffer(pRaytracing, pDesc, &AS->mHitGroupIndices);
-	for (unsigned i = 0; i < pDesc->mBottomASDescsCount; ++i)
+	for (unsigned i = 0; i < pDesc->mInstancesDescCount; ++i)
 	{
 		uint32_t hitID = pDesc->pInstanceDescs[i].mInstanceContributionToHitGroupIndex;
 		//find for vector is O(n) but this is done once. It is faster for iteration (than iteration over set) which will happen often
@@ -675,24 +676,23 @@ void addAccelerationStructure(Raytracing* pRaytracing, const AccelerationStructu
 		if (it == AS->mActiveHitGroups.end())
 			AS->mActiveHitGroups.push_back(hitID);
 	}
-	for (unsigned i = 0; i < pDesc->mBottomASDescsCount; ++i)
 	{
 		// Create an acceleration structure from our vertex position data
 		MPSTriangleAccelerationStructure* _accelerationStructure = [[MPSTriangleAccelerationStructure alloc] initWithGroup:group];
 		
 		_accelerationStructure.vertexBuffer = _vertexPositionBuffer->mtlBuffer;
-		_accelerationStructure.vertexBufferOffset = _vertexPositionBuffer->mOffset + offsets[i].vbGeometriesOffsets[0];
-		_accelerationStructure.vertexStride = offsets[i].vertexStride;
+		_accelerationStructure.vertexBufferOffset = _vertexPositionBuffer->mOffset + offset.vbGeometriesOffsets[0];
+		_accelerationStructure.vertexStride = offset.vertexStride;
 		
 		_accelerationStructure.indexBuffer = _indexBuffer->mtlBuffer;
 		_accelerationStructure.indexBufferOffset = _indexBuffer->mOffset;
 		_accelerationStructure.indexType = pDesc->mIndexType == INDEX_TYPE_UINT32 ? MPSDataTypeUInt32 : MPSDataTypeUInt16;
-		_accelerationStructure.indexBufferOffset = offsets[i].ibGeometriesOffsets[0];
+		_accelerationStructure.indexBufferOffset = offset.ibGeometriesOffsets[0];
 		
 		_accelerationStructure.maskBuffer = nil;
 		_accelerationStructure.maskBufferOffset = 0;
 		
-		_accelerationStructure.triangleCount = offsets[i].trianglesCount;
+		_accelerationStructure.triangleCount = offset.trianglesCount;
 		
 		[AS->pBottomAS addObject:_accelerationStructure];
 	}
@@ -713,6 +713,7 @@ void addAccelerationStructure(Raytracing* pRaytracing, const AccelerationStructu
 	*ppAccelerationStructure = AS;
 }
 
+API_AVAILABLE(macos(10.14), ios(12.0))
 void cmdBuildTopAS(Cmd* pCmd, Raytracing* pRaytracing, AccelerationStructure* pAccelerationStructure)
 {
 	ASSERT(pRaytracing);
@@ -721,6 +722,7 @@ void cmdBuildTopAS(Cmd* pCmd, Raytracing* pRaytracing, AccelerationStructure* pA
 	[pAccelerationStructure->pInstanceAccel rebuild];
 }
 
+API_AVAILABLE(macos(10.14), ios(12.0))
 void cmdBuildBottomAS(Cmd* pCmd, Raytracing* pRaytracing, AccelerationStructure* pAccelerationStructure, unsigned bottomASIndex)
 {
 	ASSERT(pRaytracing);
@@ -730,28 +732,36 @@ void cmdBuildBottomAS(Cmd* pCmd, Raytracing* pRaytracing, AccelerationStructure*
 	[pAccelerationStructure->pBottomAS[bottomASIndex] rebuild];
 }
 
+API_AVAILABLE(macos(10.14), ios(12.0))
 void cmdBuildAccelerationStructure(Cmd* pCmd, Raytracing* pRaytracing, RaytracingBuildASDesc* pDesc)
 {
 	for (unsigned i = 0; i < pDesc->mBottomASIndicesCount; ++i)
 	{
-		cmdBuildBottomAS(pCmd, pRaytracing, pDesc->pAccelerationStructure, pDesc->pBottomASIndices[i]);
+		AccelerationStructure* as = pDesc->ppAccelerationStructures[pDesc->pBottomASIndices[i]];
+		cmdBuildBottomAS(pCmd, pRaytracing, as, pDesc->pBottomASIndices[i]);
 	}
-	cmdBuildTopAS(pCmd, pRaytracing, pDesc->pAccelerationStructure);
+	
+	for (unsigned i = 0; i < pDesc->mBottomASIndicesCount; ++i)
+	{
+		cmdBuildTopAS(pCmd, pRaytracing, pDesc->ppAccelerationStructures[i]);
+	}
 }
 
+API_AVAILABLE(macos(10.14), ios(12.0))
 void removeRaytracing(Renderer* pRenderer, Raytracing* pRaytracing)
 {
 	ASSERT(pRaytracing);
 	pRaytracing->mClassificationPipeline = nil;
 	pRaytracing->mClassificationArgumentEncoder = nil;
-	conf_delete(pRaytracing->pParallelPrimitives);
+	tf_delete(pRaytracing->pParallelPrimitives);
 	pRaytracing->pParallelPrimitives = NULL;
 	pRaytracing->pIntersector = nil;
 	pRaytracing->~Raytracing();
 	memset(pRaytracing, 0, sizeof(*pRaytracing));
-	conf_free(pRaytracing);
+	tf_free(pRaytracing);
 }
 
+API_AVAILABLE(macos(10.14), ios(12.0))
 void addSubFunctions(MTLComputePipelineDescriptor* computeDescriptor, id<MTLLibrary> library, NSMutableArray* pipelineStates) {
 	NSString* functionName = computeDescriptor.computeFunction.name;
 	for (uint32_t i = 0;; i += 1)
@@ -776,6 +786,7 @@ void addSubFunctions(MTLComputePipelineDescriptor* computeDescriptor, id<MTLLibr
 	}
 }
 
+API_AVAILABLE(macos(10.14), ios(12.0))
 void addRaytracingPipeline(const RaytracingPipelineDesc* pDesc, Pipeline** ppGenericPipeline)
 {
 	ASSERT(pDesc);
@@ -784,13 +795,13 @@ void addRaytracingPipeline(const RaytracingPipelineDesc* pDesc, Pipeline** ppGen
 	Raytracing* pRaytracing = pDesc->pRaytracing;
 	ASSERT(pRaytracing);
 	
-	Pipeline* pGenericPipeline =(Pipeline*)conf_calloc(1, sizeof(Pipeline));
+	Pipeline* pGenericPipeline =(Pipeline*)tf_calloc_memalign(1, alignof(Pipeline), sizeof(Pipeline));
 	ASSERT(pGenericPipeline);
 	
 	pGenericPipeline->pShader = pDesc->pRayGenShader;
 	pGenericPipeline->mType = PIPELINE_TYPE_RAYTRACING;
 	
-	RaytracingPipeline* pPipeline = (RaytracingPipeline*)conf_calloc(1, sizeof(RaytracingPipeline));
+	RaytracingPipeline* pPipeline = (RaytracingPipeline*)tf_calloc(1, sizeof(RaytracingPipeline));
 	memset(pPipeline, 0, sizeof(*pPipeline));
 	
 	pGenericPipeline->pRaytracingPipeline = pPipeline;
@@ -820,16 +831,16 @@ void addRaytracingPipeline(const RaytracingPipelineDesc* pDesc, Pipeline** ppGen
 #else
 	MTLResourceOptions options = MTLResourceStorageModeShared;
 #endif
-	pPipeline->pHitGroupShaders = (HitGroupShaders*)conf_calloc(pDesc->mHitGroupCount, sizeof(HitGroupShaders));
-	pPipeline->mHitGroupNames = (char**)conf_calloc(pDesc->mHitGroupCount, sizeof(char*));
-	pPipeline->pHitGroupShaderCounts = (HitGroupShaders*)conf_calloc(pDesc->mHitGroupCount, sizeof(HitGroupShaders));
+	pPipeline->pHitGroupShaders = (HitGroupShaders*)tf_calloc(pDesc->mHitGroupCount, sizeof(HitGroupShaders));
+	pPipeline->mHitGroupNames = (char**)tf_calloc(pDesc->mHitGroupCount, sizeof(char*));
+	pPipeline->pHitGroupShaderCounts = (HitGroupShaders*)tf_calloc(pDesc->mHitGroupCount, sizeof(HitGroupShaders));
 	
 	memset(pPipeline->pHitGroupShaderCounts, 0, pDesc->mHitGroupCount * sizeof(HitGroupShaders));
 	
 	for (uint32_t i = 0; i < pDesc->mHitGroupCount; ++i)
 	{
 		const char* groupName = pDesc->pHitGroups[i].pHitGroupName;
-		pPipeline->mHitGroupNames[i] = (char*)conf_calloc(strlen(groupName) + 1, sizeof(char));
+		pPipeline->mHitGroupNames[i] = (char*)tf_calloc(strlen(groupName) + 1, sizeof(char));
 		memcpy(pPipeline->mHitGroupNames[i], groupName, strlen(groupName) + 1);
 	}
 	
@@ -911,8 +922,8 @@ void addRaytracingPipeline(const RaytracingPipelineDesc* pDesc, Pipeline** ppGen
 		}
 	}
 	
-	pPipeline->mMissGroupNames = (char**)conf_calloc(pDesc->mMissShaderCount, sizeof(char*));
-	pPipeline->pMissShaderIndices = (uint16_t*)conf_calloc(pDesc->mMissShaderCount + 1, sizeof(uint16_t));
+	pPipeline->mMissGroupNames = (char**)tf_calloc(pDesc->mMissShaderCount, sizeof(char*));
+	pPipeline->pMissShaderIndices = (uint16_t*)tf_calloc(pDesc->mMissShaderCount + 1, sizeof(uint16_t));
 	
 	for (uint32_t i = 0; i < pDesc->mMissShaderCount; ++i)
 	{
@@ -937,7 +948,7 @@ void addRaytracingPipeline(const RaytracingPipelineDesc* pDesc, Pipeline** ppGen
 		addSubFunctions(computeDescriptor, pDesc->ppMissShaders[i]->mtlLibrary, pPipeline->mMetalPipelines);
 		
 		const char* groupName = pDesc->ppMissShaders[i]->pEntryNames[0];
-		pPipeline->mMissGroupNames[i] = (char*)conf_calloc(strlen(groupName) + 1, sizeof(char));
+		pPipeline->mMissGroupNames[i] = (char*)tf_calloc(strlen(groupName) + 1, sizeof(char));
 		memcpy(pPipeline->mMissGroupNames[i], groupName, strlen(groupName) + 1);
 	}
 	pPipeline->pMissShaderIndices[pDesc->mMissShaderCount] = (uint16_t)pPipeline->mMetalPipelines.count;
@@ -984,29 +995,29 @@ void addRaytracingPipeline(const RaytracingPipelineDesc* pDesc, Pipeline** ppGen
 	loadDesc.mDesc.mSize = 4 * sizeof(uint32_t);
 	for (uint32_t i = 0; i < 2; i += 1) {
 		loadDesc.ppBuffer = &pPipeline->pRayCountBuffer[i];
-		addResource(&loadDesc, NULL, LOAD_PRIORITY_NORMAL);
+		addResource(&loadDesc, NULL);
 	}
 	
 	loadDesc.mDesc.mSize = pPipeline->mMaxRaysCount * sizeof(uint32_t);
 	loadDesc.ppBuffer = &pPipeline->pPathHitGroupsBuffer;
-	addResource(&loadDesc, NULL, LOAD_PRIORITY_NORMAL);
+	addResource(&loadDesc, NULL);
 	
 	loadDesc.ppBuffer = &pPipeline->pSortedPathHitGroupsBuffer;
-	addResource(&loadDesc, NULL, LOAD_PRIORITY_NORMAL);
+	addResource(&loadDesc, NULL);
 	
 	loadDesc.ppBuffer = &pPipeline->pPathIndicesBuffer;
-	addResource(&loadDesc, NULL, LOAD_PRIORITY_NORMAL);
+	addResource(&loadDesc, NULL);
 	
 	loadDesc.ppBuffer = &pPipeline->pSortedPathIndicesBuffer;
-	addResource(&loadDesc, NULL, LOAD_PRIORITY_NORMAL);
+	addResource(&loadDesc, NULL);
 	
 	loadDesc.mDesc.mSize = pPipeline->mMetalPipelines.count * sizeof(uint32_t);
 	loadDesc.ppBuffer = &pPipeline->pHitGroupsOffsetBuffer;
-	addResource(&loadDesc, NULL, LOAD_PRIORITY_NORMAL);
+	addResource(&loadDesc, NULL);
 	
 	loadDesc.mDesc.mSize = pPipeline->mMetalPipelines.count * 8 * sizeof(uint32_t);
 	loadDesc.ppBuffer = &pPipeline->pHitGroupIndirectArgumentsBuffer;
-	addResource(&loadDesc, NULL, LOAD_PRIORITY_NORMAL);
+	addResource(&loadDesc, NULL);
 	
 	NSInteger pathCallStackHeadersLength = (sizeof(int16_t) + 2 * sizeof(uint8_t)) * pPipeline->mMaxRaysCount;
 	NSInteger pathCallStackFunctionsLength = pPipeline->mMaxTraceRecursionDepth * pPipeline->mMaxRaysCount * sizeof(int16_t);
@@ -1022,7 +1033,7 @@ void addRaytracingPipeline(const RaytracingPipelineDesc* pDesc, Pipeline** ppGen
 	[classificationArgumentEncoder setBuffer:pPipeline->pPathHitGroupsBuffer->mtlBuffer offset:0 atIndex:3];
 	memcpy([classificationArgumentEncoder constantDataAtIndex:4], &pPipeline->mMaxTraceRecursionDepth, sizeof(uint32_t));
 	
-	id <MTLArgumentEncoder> raytracingArgumentEncoder = [pDesc->pRayGenShader->mtlComputeShader newArgumentEncoderWithBufferIndex:0];
+	id <MTLArgumentEncoder> raytracingArgumentEncoder = [pDesc->pRayGenShader->mtlComputeShader newArgumentEncoderWithBufferIndex:DESCRIPTOR_UPDATE_FREQ_COUNT];
 	pPipeline->mRaytracingArgumentsBuffer = [pRaytracing->pRenderer->pDevice newBufferWithLength:raytracingArgumentEncoder.encodedLength options:MTLResourceStorageModeShared];
 	[raytracingArgumentEncoder setArgumentBuffer:pPipeline->mRaytracingArgumentsBuffer offset:0];
 	[raytracingArgumentEncoder setBuffer:pPipeline->mSettingsBuffer offset:0 atIndex:0];
@@ -1035,22 +1046,23 @@ void addRaytracingPipeline(const RaytracingPipelineDesc* pDesc, Pipeline** ppGen
 	*ppGenericPipeline = pGenericPipeline;
 }
 
+API_AVAILABLE(macos(10.14), ios(12.0))
 void removeRaytracingPipeline(RaytracingPipeline* pPipeline)
 {
 	ASSERT(pPipeline);
 	
 	pPipeline->mMetalPipelines = nil;
-	conf_free(pPipeline->pHitGroupShaders);
-	conf_free(pPipeline->pHitGroupShaderCounts);
-	conf_free(pPipeline->pMissShaderIndices);
+	tf_free(pPipeline->pHitGroupShaders);
+	tf_free(pPipeline->pHitGroupShaderCounts);
+	tf_free(pPipeline->pMissShaderIndices);
 	
 	for (uint32_t i = 0; i < pPipeline->mHitGroupCount; ++i)
-		conf_free(pPipeline->mHitGroupNames[i]);
-	conf_free(pPipeline->mHitGroupNames);
+		tf_free(pPipeline->mHitGroupNames[i]);
+	tf_free(pPipeline->mHitGroupNames);
 	
 	for (uint32_t i = 0; i < pPipeline->mMissShaderCount; ++i)
-		conf_free(pPipeline->mMissGroupNames[i]);
-	conf_free(pPipeline->mMissGroupNames);
+		tf_free(pPipeline->mMissGroupNames[i]);
+	tf_free(pPipeline->mMissGroupNames);
 	
 	pPipeline->mIntersector = nil;
 	pPipeline->mRaysBuffer = nil;
@@ -1072,9 +1084,10 @@ void removeRaytracingPipeline(RaytracingPipeline* pPipeline)
 //	pPipeline->~RaytracingPipeline();
 //	memset(pPipeline, 0, sizeof(*pPipeline));
 	
-	conf_free(pPipeline);
+	tf_free(pPipeline);
 }
 
+API_AVAILABLE(macos(10.14), ios(12.0))
 void removeAccelerationStructure(Raytracing* pRaytracing, AccelerationStructure* pAccelerationStructure)
 {
 	pAccelerationStructure->pSharedGroup = nil;
@@ -1089,16 +1102,17 @@ void removeAccelerationStructure(Raytracing* pRaytracing, AccelerationStructure*
 	removeResource(pAccelerationStructure->mHitGroupIndices);
 	
 	pAccelerationStructure->~AccelerationStructure();
-	conf_free(pAccelerationStructure);
+	tf_free(pAccelerationStructure);
 }
 
+API_AVAILABLE(macos(10.14), ios(12.0))
 void addRaytracingShaderTable(Raytracing* pRaytracing, const RaytracingShaderTableDesc* pDesc, RaytracingShaderTable** ppTable)
 {
 	ASSERT(pRaytracing);
 	ASSERT(pDesc);
 	ASSERT(ppTable);
 	
-	RaytracingShaderTable* table = (RaytracingShaderTable*)conf_calloc(1, sizeof(RaytracingShaderTable));
+	RaytracingShaderTable* table = (RaytracingShaderTable*)tf_calloc(1, sizeof(RaytracingShaderTable));
 	memset(table, 0, sizeof(RaytracingShaderTable));
 	
 	table->pPipeline = pDesc->pPipeline;
@@ -1110,7 +1124,7 @@ void addRaytracingShaderTable(Raytracing* pRaytracing, const RaytracingShaderTab
 	// FIXME: is it even valid to specify a different ray gen for the shader table than was used for the RaytracingPipeline?
 	table->mRayGenPipeline = pPipeline->mMetalPipelines[0];
 	
-	table->pHitGroupIndices = (uint32_t*)conf_calloc(pDesc->mHitGroupCount, sizeof(uint32_t));
+	table->pHitGroupIndices = (uint32_t*)tf_calloc(pDesc->mHitGroupCount, sizeof(uint32_t));
 	table->mHitGroupCount = pDesc->mHitGroupCount;
 	for (uint32_t i = 0; i < pDesc->mHitGroupCount; i += 1)
 	{
@@ -1131,7 +1145,7 @@ void addRaytracingShaderTable(Raytracing* pRaytracing, const RaytracingShaderTab
 	hitGroupDesc.mDesc.mMemoryUsage = RESOURCE_MEMORY_USAGE_GPU_ONLY;
 	hitGroupDesc.mDesc.mSize = sizeof(HitGroupShaders) * pDesc->mHitGroupCount;
 	hitGroupDesc.ppBuffer = &table->mHitGroupShadersBuffer;
-	addResource(&hitGroupDesc, NULL, LOAD_PRIORITY_NORMAL);
+	addResource(&hitGroupDesc, NULL);
 
 	BufferUpdateDesc hitGroupUpdateDesc = { table->mHitGroupShadersBuffer };
 	beginUpdateResource(&hitGroupUpdateDesc);
@@ -1144,7 +1158,7 @@ void addRaytracingShaderTable(Raytracing* pRaytracing, const RaytracingShaderTab
 	
 	endUpdateResource(&hitGroupUpdateDesc, NULL);
 	
-	table->pMissShaderIndices = (uint32_t*)conf_calloc(pDesc->mMissShaderCount, sizeof(uint32_t));
+	table->pMissShaderIndices = (uint32_t*)tf_calloc(pDesc->mMissShaderCount, sizeof(uint32_t));
 	table->mMissShaderCount = pDesc->mMissShaderCount;
 	for (uint32_t i = 0; i < pDesc->mMissShaderCount; i += 1)
 	{
@@ -1164,7 +1178,7 @@ void addRaytracingShaderTable(Raytracing* pRaytracing, const RaytracingShaderTab
 	table->mMissShaderIndicesSize = sizeof(uint16_t) * pDesc->mMissShaderCount;
 	if (table->mMissShaderIndicesSize)
 	{
-		table->mMissShaderIndicesBuffer = (uint16_t*)conf_malloc(sizeof(uint16_t) * pDesc->mMissShaderCount);
+		table->mMissShaderIndicesBuffer = (uint16_t*)tf_malloc(sizeof(uint16_t) * pDesc->mMissShaderCount);
 		for (uint32_t i = 0; i < pDesc->mMissShaderCount; i += 1)
 		{
 			table->mMissShaderIndicesBuffer[i] = pPipeline->pMissShaderIndices[table->pMissShaderIndices[i]];
@@ -1174,22 +1188,24 @@ void addRaytracingShaderTable(Raytracing* pRaytracing, const RaytracingShaderTab
 	*ppTable = table;
 }
 
+API_AVAILABLE(macos(10.14), ios(12.0))
 void removeRaytracingShaderTable(Raytracing* pRaytracing, RaytracingShaderTable* pTable)
 {
 	ASSERT(pTable);
 	
 	pTable->mRayGenPipeline = nil;
 	removeResource(pTable->mHitGroupShadersBuffer);
-	conf_free(pTable->mMissShaderIndicesBuffer);
+	tf_free(pTable->mMissShaderIndicesBuffer);
 	
-	conf_free(pTable->pMissShaderIndices);
-	conf_free(pTable->pHitGroupIndices);
+	tf_free(pTable->pMissShaderIndices);
+	tf_free(pTable->pHitGroupIndices);
 	
 	pTable->~RaytracingShaderTable();
 	memset(pTable, 0, sizeof(*pTable));
-	conf_free(pTable);
+	tf_free(pTable);
 }
 
+API_AVAILABLE(macos(10.14), ios(12.0))
 void dispatchShader(id<MTLComputeCommandEncoder> computeEncoder, RaytracingPipeline* pPipeline, uint16_t shaderIndex, eastl::unordered_set<uint16_t>& dispatchedShaders)
 {
 	if (dispatchedShaders.find(shaderIndex) != dispatchedShaders.end())
@@ -1197,8 +1213,8 @@ void dispatchShader(id<MTLComputeCommandEncoder> computeEncoder, RaytracingPipel
 	
 	NSInteger indirectBufferOffset = shaderIndex * 8 * sizeof(uint32_t);
 
-	[computeEncoder setBuffer:pPipeline->pHitGroupIndirectArgumentsBuffer->mtlBuffer offset:indirectBufferOffset atIndex:2];
-	[computeEncoder setBytes:&shaderIndex length:sizeof(shaderIndex) atIndex:3];
+	[computeEncoder setBuffer:pPipeline->pHitGroupIndirectArgumentsBuffer->mtlBuffer offset:indirectBufferOffset atIndex:DESCRIPTOR_UPDATE_FREQ_COUNT + 2];
+	[computeEncoder setBytes:&shaderIndex length:sizeof(shaderIndex) atIndex:DESCRIPTOR_UPDATE_FREQ_COUNT + 3];
 	
 	[computeEncoder setComputePipelineState:pPipeline->mMetalPipelines[shaderIndex]];
 	
@@ -1207,6 +1223,7 @@ void dispatchShader(id<MTLComputeCommandEncoder> computeEncoder, RaytracingPipel
 	dispatchedShaders.insert(shaderIndex);
 }
 
+API_AVAILABLE(macos(10.14), ios(12.0))
 void invokeShaders(Cmd* pCmd, Raytracing* pRaytracing,
 				   const RaytracingDispatchDesc* pDesc,
 				   id <MTLBuffer> payloadBuffer,
@@ -1307,8 +1324,8 @@ void invokeShaders(Cmd* pCmd, Raytracing* pRaytracing,
 		}
 		
 		// Bind the raytracing arguments
-		[computeEncoder setBuffer:pPipeline->mRaytracingArgumentsBuffer offset:0 atIndex:0];
-		[computeEncoder setBuffer:pPipeline->pPathIndicesBuffer->mtlBuffer offset:0 atIndex:1];
+		[computeEncoder setBuffer:pPipeline->mRaytracingArgumentsBuffer offset:0 atIndex:DESCRIPTOR_UPDATE_FREQ_COUNT + 0];
+		[computeEncoder setBuffer:pPipeline->pPathIndicesBuffer->mtlBuffer offset:0 atIndex:DESCRIPTOR_UPDATE_FREQ_COUNT + 1];
 		
 		// Iterate through subshaders of the ray generation shader (which always starts at index 0).
 		for (uint32_t j = 1; j < pPipeline->mRayGenShaderCount; j += 1)
@@ -1356,6 +1373,7 @@ void invokeShaders(Cmd* pCmd, Raytracing* pRaytracing,
 	
 }
 
+API_AVAILABLE(macos(10.14), ios(12.0))
 void cmdDispatchRays(Cmd* pCmd, Raytracing* pRaytracing, const RaytracingDispatchDesc* pDesc)
 {
 	util_barrier_required(pCmd, QUEUE_TYPE_GRAPHICS);
@@ -1417,10 +1435,10 @@ void cmdDispatchRays(Cmd* pCmd, Raytracing* pRaytracing, const RaytracingDispatc
 	[computeEncoder useResource:pRaytracingPipeline->pRayCountBuffer[0]->mtlBuffer usage:MTLResourceUsageWrite];
 	
 	short shaderIndex = 0;
-	[computeEncoder setBuffer:pRaytracingPipeline->mRaytracingArgumentsBuffer       offset:0				atIndex:0];
-	[computeEncoder setBuffer:pRaytracingPipeline->pPathIndicesBuffer->mtlBuffer 	offset:0 				atIndex:1];
-	[computeEncoder setBuffer:pRaytracingPipeline->pRayCountBuffer[0]->mtlBuffer 	offset:0 			   	atIndex:2];
-	[computeEncoder setBytes:&shaderIndex length:sizeof(shaderIndex) atIndex:3];
+	[computeEncoder setBuffer:pRaytracingPipeline->mRaytracingArgumentsBuffer       offset:0				atIndex:DESCRIPTOR_UPDATE_FREQ_COUNT];
+	[computeEncoder setBuffer:pRaytracingPipeline->pPathIndicesBuffer->mtlBuffer 	offset:0 				atIndex:DESCRIPTOR_UPDATE_FREQ_COUNT + 1];
+	[computeEncoder setBuffer:pRaytracingPipeline->pRayCountBuffer[0]->mtlBuffer 	offset:0 			   	atIndex:DESCRIPTOR_UPDATE_FREQ_COUNT + 2];
+	[computeEncoder setBytes:&shaderIndex length:sizeof(shaderIndex) atIndex:DESCRIPTOR_UPDATE_FREQ_COUNT + 3];
 	
 	// Bind the ray generation compute pipeline
 	[computeEncoder setComputePipelineState:pRaytracingPipeline->mMetalPipelines[0]];
@@ -1440,34 +1458,42 @@ void mtl_cmdBindRaytracingPipeline(Cmd* pCmd, Pipeline* pPipeline)
 	UNREF_PARAM(pPipeline);
 }
 
-struct SSVGFDenoiser {
+struct SSVGFDenoiser
+{
 	id mtlDenoiser; // MPSSVGFDenoiser*
 };
 
 void addSSVGFDenoiser(Renderer* pRenderer, SSVGFDenoiser** ppDenoiser)
 {
-	if (@available(macOS 10.15, iOS 13, *)) {
-		SSVGFDenoiser *denoiser = (SSVGFDenoiser*)conf_calloc(1, sizeof(SSVGFDenoiser));
+	if (@available(macOS 10.15, iOS 13, *))
+	{
+		SSVGFDenoiser *denoiser = (SSVGFDenoiser*)tf_calloc(1, sizeof(SSVGFDenoiser));
 		denoiser->mtlDenoiser = [[MPSSVGFDenoiser alloc] initWithDevice:pRenderer->pDevice];
 		*ppDenoiser = denoiser;
-	} else {
+	}
+	else
+	{
 		*ppDenoiser = NULL;
 	}
 }
 
 void removeSSVGFDenoiser(SSVGFDenoiser* pDenoiser)
 {
-	if (!pDenoiser) { return; }
+	if (!pDenoiser)
+	{
+		return;
+	}
 	
 	pDenoiser->mtlDenoiser = nil;
-	conf_free(pDenoiser);
+	tf_free(pDenoiser);
 }
 
 void clearSSVGFDenoiserTemporalHistory(SSVGFDenoiser* pDenoiser)
 {
 	ASSERT(pDenoiser);
 	
-	if (@available(macOS 10.15, iOS 13, *)) {
+	if (@available(macOS 10.15, iOS 13, *))
+	{
 		[(MPSSVGFDenoiser*)pDenoiser->mtlDenoiser clearTemporalHistory];
 	}
 }
@@ -1476,7 +1502,8 @@ void cmdSSVGFDenoise(Cmd* pCmd, SSVGFDenoiser* pDenoiser, Texture* pSourceTextur
 {
 	ASSERT(pDenoiser);
 	
-	if (@available(macOS 10.15, iOS 13, *)) {
+	if (@available(macOS 10.15, iOS 13, *))
+	{
 		if (pCmd->mtlComputeEncoder)
 		{
 			[pCmd->mtlComputeEncoder memoryBarrierWithScope:MTLBarrierScopeTextures];
@@ -1508,11 +1535,60 @@ void cmdSSVGFDenoise(Cmd* pCmd, SSVGFDenoiser* pDenoiser, Texture* pSourceTextur
 
 		add_texture(pCmd->pRenderer, &resultTextureDesc, ppOut, false);
 		(*ppOut)->mpsTextureAllocator = denoiser.textureAllocator;
-	} else {
+	}
+	else
+	{
 		*ppOut = {};
 		return;
 	}
 }
 
+#else
+bool isRaytracingSupported(Renderer* pRenderer)
+{
+	return false;
+}
+
+bool initRaytracing(Renderer* pRenderer, Raytracing** ppRaytracing)
+{
+	return false;
+}
+
+void removeRaytracing(Renderer* pRenderer, Raytracing* pRaytracing)
+{
+}
+
+void addAccelerationStructure(Raytracing* pRaytracing, const AccelerationStructureDescTop* pDesc, AccelerationStructure** ppAccelerationStructure)
+{
+}
+
+void cmdBuildTopAS(Cmd* pCmd, Raytracing* pRaytracing, AccelerationStructure* pAccelerationStructure)
+{
+}
+
+void cmdBuildBottomAS(Cmd* pCmd, Raytracing* pRaytracing, AccelerationStructure* pAccelerationStructure, unsigned bottomASIndex)
+{
+}
+
+void cmdBuildAccelerationStructure(Cmd* pCmd, Raytracing* pRaytracing, RaytracingBuildASDesc* pDesc)
+{
+}
+
+void addRaytracingShaderTable(Raytracing* pRaytracing, const RaytracingShaderTableDesc* pDesc, RaytracingShaderTable** ppTable)
+{
+}
+
+void cmdDispatchRays(Cmd* pCmd, Raytracing* pRaytracing, const RaytracingDispatchDesc* pDesc)
+{
+}
+
+void removeAccelerationStructure(Raytracing* pRaytracing, AccelerationStructure* pAccelerationStructure)
+{
+}
+
+void removeRaytracingShaderTable(Raytracing* pRaytracing, RaytracingShaderTable* pTable)
+{
+}
+#endif
 #endif
 

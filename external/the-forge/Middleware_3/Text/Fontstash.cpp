@@ -48,8 +48,6 @@
 
 #include "../../Common_3/OS/Interfaces/IMemory.h"
 
-ResourceDirEnum RD_MIDDLEWARE_TEXT = RD_MIDDLEWARE_0;
-
 class _Impl_FontStash
 {
 public:
@@ -63,7 +61,7 @@ public:
 		mText3D = false;
 	}
 
-	bool init(Renderer* renderer, int width_, int height_)
+	bool init(Renderer* renderer, int width_, int height_, uint32_t ringSizeBytes)
 	{
 		pRenderer = renderer;
 
@@ -72,18 +70,17 @@ public:
 		desc.mArraySize = 1;
 		desc.mDepth = 1;
 		desc.mDescriptors = DESCRIPTOR_TYPE_TEXTURE;
-		desc.mFlags = TEXTURE_CREATION_FLAG_OWN_MEMORY_BIT;
 		desc.mFormat = TinyImageFormat_R8_UNORM;
 		desc.mHeight = height_;
 		desc.mMipLevels = 1;
 		desc.mSampleCount = SAMPLE_COUNT_1;
 		desc.mStartState = RESOURCE_STATE_COMMON;
 		desc.mWidth = width_;
-		desc.pDebugName = L"Fontstash Texture";
+		desc.pName = "Fontstash Texture";
 		TextureLoadDesc loadDesc = {};
 		loadDesc.ppTexture = &pCurrentTexture;
 		loadDesc.pDesc = &desc;
-		addResource(&loadDesc, NULL, LOAD_PRIORITY_NORMAL);
+		addResource(&loadDesc, NULL);
 
 		// create FONS context
 		FONSparams params;
@@ -125,11 +122,11 @@ public:
 		addShaderBinary(pRenderer, &binaryShaderDesc, &pShaders[1]);
 #else
 		ShaderLoadDesc text2DShaderDesc = {};
-		text2DShaderDesc.mStages[0] = { "fontstash2D.vert", NULL, 0, RD_MIDDLEWARE_TEXT };
-		text2DShaderDesc.mStages[1] = { "fontstash.frag", NULL, 0, RD_MIDDLEWARE_TEXT };
+		text2DShaderDesc.mStages[0] = { "fontstash2D.vert", NULL, 0, NULL };
+		text2DShaderDesc.mStages[1] = { "fontstash.frag", NULL, 0, NULL};
 		ShaderLoadDesc text3DShaderDesc = {};
-		text3DShaderDesc.mStages[0] = { "fontstash3D.vert", NULL, 0, RD_MIDDLEWARE_TEXT };
-		text3DShaderDesc.mStages[1] = { "fontstash.frag", NULL, 0, RD_MIDDLEWARE_TEXT };
+		text3DShaderDesc.mStages[0] = { "fontstash3D.vert", NULL, 0, NULL };
+		text3DShaderDesc.mStages[1] = { "fontstash.frag", NULL, 0, NULL };
 
 		addShader(pRenderer, &text2DShaderDesc, &pShaders[0]);
 		addShader(pRenderer, &text3DShaderDesc, &pShaders[1]);
@@ -159,8 +156,8 @@ public:
 		BufferDesc vbDesc = {};
 		vbDesc.mDescriptors = DESCRIPTOR_TYPE_VERTEX_BUFFER;
 		vbDesc.mMemoryUsage = RESOURCE_MEMORY_USAGE_CPU_TO_GPU;
-		vbDesc.mSize = 1024 * 1024 * sizeof(float4);
-		vbDesc.mFlags = BUFFER_CREATION_FLAG_PERSISTENT_MAP_BIT | BUFFER_CREATION_FLAG_OWN_MEMORY_BIT;
+		vbDesc.mSize = ringSizeBytes;
+		vbDesc.mFlags = BUFFER_CREATION_FLAG_PERSISTENT_MAP_BIT;
 		addGPURingBuffer(pRenderer, &vbDesc, &pMeshRingBuffer);
 		/************************************************************************/
 		/************************************************************************/
@@ -177,7 +174,7 @@ public:
 
 		// unload font buffers
 		for (unsigned int i = 0; i < (uint32_t)mFontBuffers.size(); i++)
-			conf_free(mFontBuffers[i]);
+			tf_free(mFontBuffers[i]);
 
 		removeDescriptorSet(pRenderer, pDescriptorSets);
 		removeRootSignature(pRenderer, pRootSignature);
@@ -192,7 +189,7 @@ public:
 		removeSampler(pRenderer, pDefaultSampler);
 	}
 
-	bool load(RenderTarget** pRts, uint32_t count)
+	bool load(RenderTarget** pRts, uint32_t count, PipelineCache* pCache)
 	{
 		VertexLayout vertexLayout = {};
 		vertexLayout.mAttribCount = 2;
@@ -233,6 +230,7 @@ public:
 		rasterizerStateDesc[1].mScissor = true;
 
 		PipelineDesc pipelineDesc = {};
+		pipelineDesc.pCache = pCache;
 		pipelineDesc.mType = PIPELINE_TYPE_GRAPHICS;
 		pipelineDesc.mGraphicsDesc.mPrimitiveTopo = PRIMITIVE_TOPO_TRI_LIST;
 		pipelineDesc.mGraphicsDesc.mRenderTargetCount = 1;
@@ -306,16 +304,16 @@ public:
 	bool                 mText3D;
 };
 
-bool Fontstash::init(Renderer* renderer, uint32_t width, uint32_t height)
+bool Fontstash::init(Renderer* renderer, uint32_t width, uint32_t height, uint32_t ringSizeBytes)
 {
-	impl = conf_placement_new<_Impl_FontStash>(conf_calloc(1, sizeof(_Impl_FontStash)));
+	impl = tf_placement_new<_Impl_FontStash>(tf_calloc(1, sizeof(_Impl_FontStash)));
 	impl->mDpiScale = getDpiScale();
 	impl->mDpiScaleMin = min(impl->mDpiScale.x, impl->mDpiScale.y);
 
 	width = width * (int)ceilf(impl->mDpiScale.x);
 	height = height * (int)ceilf(impl->mDpiScale.y);
 
-	bool success = impl->init(renderer, width, height);
+	bool success = impl->init(renderer, width, height, ringSizeBytes);
 	m_fFontMaxSize = min(width, height) / 10.0f;    // see fontstash.h, line 1271, for fontSize calculation
 
 	return success;
@@ -325,12 +323,12 @@ void Fontstash::exit()
 {
 	impl->exit();
 	impl->~_Impl_FontStash();
-	conf_free(impl);
+	tf_free(impl);
 }
 
-bool Fontstash::load(RenderTarget** pRts, uint32_t count)
+bool Fontstash::load(RenderTarget** pRts, uint32_t count, PipelineCache* pCache)
 {
-	return impl->load(pRts, count);
+	return impl->load(pRts, count, pCache);
 }
 
 void Fontstash::unload()
@@ -338,24 +336,28 @@ void Fontstash::unload()
 	impl->unload();
 }
 
-int Fontstash::defineFont(const char* identification, const char* filename, ResourceDirEnum root)
+int Fontstash::defineFont(const char* identification, const char* pFontPath)
 {
 	FONScontext* fs = impl->pContext;
 	
-    PathHandle filePath = fsGetPathInResourceDirEnum(root, filename);
-    FileStream* fh = fsOpenFile(filePath, FM_READ_BINARY);
-    ssize_t bytes = fsGetStreamFileSize(fh);
-	void*    buffer = conf_malloc(bytes);
-    fsReadFromStream(fh, buffer, bytes);
-    
-	// add buffer to font buffers for cleanup
-	impl->mFontBuffers.emplace_back(buffer);
-	impl->mFontBufferSizes.emplace_back((uint32_t)bytes);
-	impl->mFontNames.emplace_back(fsPathComponentToString(fsGetPathFileName(filePath)));
-    
-    fsCloseStream(fh);
+	FileStream fh = {};
+	if (fsOpenStreamFromPath(RD_FONTS, pFontPath, FM_READ_BINARY, &fh))
+	{
+		ssize_t bytes = fsGetStreamFileSize(&fh);
+		void*    buffer = tf_malloc(bytes);
+		fsReadFromStream(&fh, buffer, bytes);
 
-	return fonsAddFontMem(fs, identification, (unsigned char*)buffer, (int)bytes, 0);
+		// add buffer to font buffers for cleanup
+		impl->mFontBuffers.emplace_back(buffer);
+		impl->mFontBufferSizes.emplace_back((uint32_t)bytes);
+		impl->mFontNames.emplace_back(pFontPath);
+
+		fsCloseStream(&fh);
+
+		return fonsAddFontMem(fs, identification, (unsigned char*)buffer, (int)bytes, 0);
+	}
+
+	return INT32_MAX;
 }
 
 void* Fontstash::getFontBuffer(uint32_t index)
@@ -479,22 +481,20 @@ void _Impl_FontStash::fonsImplementationRenderText(
 
 	if (ctx->mUpdateTexture)
 	{
+		// #TODO: Investigate - Causes hang on low-mid end Android phones (tested on Samsung Galaxy A50s)
+#ifndef __ANDROID__
 		waitQueueIdle(pCmd->pQueue);
-
-		RawImageData rawData = {};
-		rawData.pRawData = (uint8_t*)ctx->pPixels;
-		rawData.mFormat = TinyImageFormat_R8_UNORM;
-		rawData.mWidth = ctx->mWidth;
-		rawData.mHeight = ctx->mHeight;
-		rawData.mDepth = 1;
-		rawData.mArraySize = 1;
-		rawData.mMipLevels = 1;
+#endif
 
 		SyncToken token = {};
 		TextureUpdateDesc updateDesc = {};
 		updateDesc.pTexture = ctx->pCurrentTexture;
-		updateDesc.pRawImageData = &rawData;
 		beginUpdateResource(&updateDesc);
+		for (uint32_t r = 0; r < updateDesc.mRowCount; ++r)
+		{
+			memcpy(updateDesc.pMappedData + r * updateDesc.mDstRowStride,
+				ctx->pPixels + r * updateDesc.mSrcRowStride, updateDesc.mSrcRowStride);
+		}
 		endUpdateResource(&updateDesc, &token);
 		waitForToken(&token);
 
@@ -516,7 +516,7 @@ void _Impl_FontStash::fonsImplementationRenderText(
 	endUpdateResource(&update, NULL);
 
 	// extract color
-	ubyte* colorByte = (ubyte*)colors;
+	uint8_t* colorByte = (uint8_t*)colors;
 	float4 color;
 	for (int i = 0; i < 4; i++)
 		color[i] = ((float)colorByte[i]) / 255.0f;

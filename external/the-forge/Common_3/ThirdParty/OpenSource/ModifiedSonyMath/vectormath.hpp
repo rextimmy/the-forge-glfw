@@ -34,14 +34,19 @@
 
 #define VECTORMATH_FORCE_SCALAR_MODE 0
 
-#ifdef ORBIS
+#if defined(ORBIS) || defined(PROSPERO)
 #define VECTORMATH_MODE_SCE 1
 #endif
 
 // Sony's library includes:
 #if VECTORMATH_MODE_SCE
+#if defined(ORBIS)
 #include "../../../../PS4/Common_3/ThirdParty/OpenSource/vectormath/cpp/vectormath_aos.h"
 #include "../../../../PS4/Common_3/ThirdParty/OpenSource/vectormath/cpp/vectormath_namespace.h"
+#elif defined(PROSPERO)
+#include "../../../../Prospero/Common_3/ThirdParty/OpenSource/vectormath/cpp/vectormath_aos.h"
+#include "../../../../Prospero/Common_3/ThirdParty/OpenSource/vectormath/cpp/vectormath_namespace.h"
+#endif
 #define VECTORMATH_MODE_SCALAR 0
 #define VECTORMATH_MODE_SSE    1
 #define VECTORMATH_MODE_NEON   0
@@ -65,12 +70,12 @@
 	#define VECTORMATH_MODE_NEON   0
 #endif // Vectormath mode selection
 
-//========================================= #ConfettiMathExtensionsBegin ================================================
-//========================================= #ConfettiAnimationMathExtensionsBegin =======================================
+//========================================= #TheForgeMathExtensionsBegin ================================================
+//========================================= #TheForgeAnimationMathExtensionsBegin =======================================
 #include "soa/soa.hpp"
 using namespace Vectormath::Soa;
-//========================================= #ConfettiAnimationMathExtensionsEnd =======================================
-//========================================= #ConfettiMathExtensionsEnd ================================================
+//========================================= #TheForgeAnimationMathExtensionsEnd =======================================
+//========================================= #TheForgeMathExtensionsEnd ================================================
 
 #include "vec2d.hpp"  // - Extended 2D vector and point classes; not aligned and always in scalar floats mode.
 #include "common.hpp" // - Miscellaneous helper functions.

@@ -24,12 +24,12 @@
 
 #ifdef _WIN32
 
-#include "Common_3/OS/Interfaces/IThread.h"
-#include "Common_3/OS//Interfaces/IOperatingSystem.h"
-#include "Common_3/OS//Interfaces/ILog.h"
-#include "Common_3/OS//Interfaces/IMemory.h"
+#include "OS/Interfaces/IThread.h"
+#include "OS/Interfaces/IOperatingSystem.h"
+#include "OS/Interfaces/ILog.h"
+#include "OS/Interfaces/IMemory.h"
 
-bool Mutex::Init(uint32_t spinCount /* = kDefaultSpinCount */, const char* name /* = nullptr */)
+bool Mutex::Init(uint32_t spinCount /* = kDefaultSpinCount */, const char* name /* = NULL */)
 {
 	return InitializeCriticalSectionAndSpinCount((CRITICAL_SECTION*)&mHandle, (DWORD)spinCount);
 }
@@ -58,14 +58,14 @@ void Mutex::Release()
 
 bool ConditionVariable::Init(const char* name)
 {
-	pHandle = (CONDITION_VARIABLE*)conf_calloc(1, sizeof(CONDITION_VARIABLE));
+	pHandle = (CONDITION_VARIABLE*)tf_calloc(1, sizeof(CONDITION_VARIABLE));
 	InitializeConditionVariable((PCONDITION_VARIABLE)pHandle);
 	return true;
 }
 
 void ConditionVariable::Destroy()
 {
-	conf_free(pHandle);
+	tf_free(pHandle);
 }
 
 void ConditionVariable::Wait(const Mutex& mutex, uint32_t ms)
@@ -142,13 +142,13 @@ unsigned int Thread::GetNumCPUCores(void)
 ThreadHandle create_thread(ThreadDesc* pDesc)
 {
 	ThreadHandle handle = CreateThread(0, 0, ThreadFunctionStatic, pDesc, 0, 0);
-	ASSERT(handle != nullptr);
+	ASSERT(handle != NULL);
 	return handle;
 }
 
 void destroy_thread(ThreadHandle handle)
 {
-	ASSERT(handle != nullptr);
+	ASSERT(handle != NULL);
 	WaitForSingleObject((HANDLE)handle, INFINITE);
 	CloseHandle((HANDLE)handle);
 	handle = 0;

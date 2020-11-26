@@ -35,14 +35,14 @@
 
 void _OutputDebugStringV(const char* str, va_list args)
 {
-#if FORGE_DEBUG
+#if defined(FORGE_DEBUG)
     vprintf(str, args);
 #endif
 }
 
 void _OutputDebugString(const char* str, ...)
 {
-#if FORGE_DEBUG
+#if defined(FORGE_DEBUG)
 	va_list arglist;
 	va_start(arglist, str);
 	vprintf(str, arglist);
@@ -60,6 +60,6 @@ void _FailedAssert(const char* file, int line, const char* statement)
 	}
 }
 
-void _PrintUnicode(const char* str, bool error) { printf(str); }
+void _PrintUnicode(const char* str, bool error) { printf("%s", str); }
 
 #endif    // ifdef __linux__

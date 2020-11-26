@@ -25,7 +25,7 @@
 
 #ifdef _WIN32
 
-#include "Common_3/OS/Interfaces/IOperatingSystem.h"
+#include "OS/Interfaces/IOperatingSystem.h"
 
 float2 getDpiScale()
 {

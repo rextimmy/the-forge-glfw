@@ -17,25 +17,13 @@ file(GLOB FORGE_OS_PROFILER "${FORGE_DIR}/Common_3/OS/Profiler/*.*")
 
 #OS filesystem
 set(FORGE_OS_FILESYSTEM
-	${FORGE_DIR}/Common_3/OS/FileSystem/FileSystemInternal.h
-	${FORGE_DIR}/Common_3/OS/FileSystem/FileSystemInternal.cpp
-	${FORGE_DIR}/Common_3/OS/FileSystem/MemoryStream.h
-	${FORGE_DIR}/Common_3/OS/FileSystem/MemoryStream.cpp
-	${FORGE_DIR}/Common_3/OS/FileSystem/SystemFileStream.h
-	${FORGE_DIR}/Common_3/OS/FileSystem/SystemFileStream.cpp
-	${FORGE_DIR}/Common_3/OS/FileSystem/ZipFileSystem.h
-	${FORGE_DIR}/Common_3/OS/FileSystem/ZipFileSystem.cpp
-	${FORGE_DIR}/Common_3/OS/FileSystem/ZipFileStream.h
-	${FORGE_DIR}/Common_3/OS/FileSystem/ZipFileStream.cpp
+	${FORGE_DIR}/Common_3/OS/FileSystem/FileSystem.cpp	
 	${FORGE_DIR}/Common_3/OS/FileSystem/SystemRun.cpp
+	${FORGE_DIR}/Common_3/OS/FileSystem/ZipFileSystem.cpp
 )
 
-#mac port note: AND NOT APPLE
-if(UNIX)
-	set(FORGE_OS_FILESYSTEM ${FORGE_OS_FILESYSTEM}
-		${FORGE_DIR}/Common_3/OS/FileSystem/UnixFileSystem.h
-		${FORGE_DIR}/Common_3/OS/FileSystem/UnixFileSystem.cpp
-	)
+if(UNIX AND NOT APPLE)
+	set(FORGE_OS_FILESYSTEM ${FORGE_OS_FILESYSTEM} ${FORGE_DIR}/Common_3/OS/FileSystem/UnixFileSystem.cpp)
 endif()
 
 #Renderer
@@ -70,9 +58,6 @@ file(GLOB FORGE_BASIS_TRANSCODER "${FORGE_DIR}/Common_3/ThirdParty/OpenSource/ba
 #zip
 file(GLOB FORGE_ZIP "${FORGE_DIR}/Common_3/ThirdParty/OpenSource/zip/*.*")
 
-#Tinyxml2
-file(GLOB FORGE_TINYXML2 "${FORGE_DIR}/Common_3/ThirdParty/OpenSource/TinyXML2/*.*")
-
 #spirv tools
 set(FORGE_SPIRVTOOLS 
 	${FORGE_DIR}/Common_3/Tools/SpirvTools/SpirvTools.h
@@ -102,7 +87,7 @@ file(GLOB FORGE_UI_IMGUI "${FORGE_DIR}/Common_3/ThirdParty/OpenSource/imgui/*.*"
 if(D3D12)
 	set(FORGE_DEFS ${FORGE_DEFS} DIRECT3D12)
 	file(GLOB FORGE_RENDERER_D3D12 "${FORGE_DIR}/Common_3/Renderer/Direct3D12/*.*")
-	set(FORGE_RENDERER ${FORGE_RENDERER} ${FORGE_RENDERER_D3D12})
+	set(FORGE_RENDERER ${FORGE_RENDERER} ${FORGE_RENDERER_D3D12})	
 endif()
 
 if(VULKAN)
@@ -124,8 +109,8 @@ set(FORGE_INCLUDES ${FORGE_INCLUDES}
 set(FORGE_DEFS ${FORGE_DEFS} USE_LOGGING )
 
 set(SOURCE_LIST ${FORGE_OS_INTERFACES} ${FORGE_OS_CORE} ${FORGE_OS_FILESYSTEM} ${FORGE_OS_IMAGE} ${FORGE_OS_LOGGING} ${FORGE_OS_MATH} ${FORGE_OS_MEMORYTRACKING}
-	${FORGE_OS_PROFILER} ${FORGE_RENDERER} ${FORGE_EASTL} ${FORGE_SPIRVTOOLS} ${FORGE_SPIRVCROSS} ${FORGE_BASIS_TRANSCODER} ${FORGE_ZIP} ${FORGE_TINYXML2} 
-	${FORGE_UI} ${FORGE_TEXT} ${FORGE_UI_IMGUI} ${FORGE_RMEM})
+	${FORGE_OS_PROFILER} ${FORGE_RENDERER} ${FORGE_EASTL} ${FORGE_SPIRVTOOLS} ${FORGE_SPIRVCROSS} ${FORGE_BASIS_TRANSCODER} ${FORGE_ZIP} ${FORGE_UI} ${FORGE_TEXT}
+	${FORGE_UI_IMGUI} ${FORGE_RMEM})
 
 #add the lib
 add_library(the-forge STATIC ${SOURCE_LIST})

@@ -22,167 +22,87 @@
  * under the License.
 */
 
-#include "CocoaFileSystem.h"
+#import <Foundation/Foundation.h>
+
 #include "../Interfaces/IFileSystem.h"
 #include "../Interfaces/ILog.h"
 #include "../Interfaces/IOperatingSystem.h"
-#include "../FileSystem/FileSystemInternal.h"
-#include "../FileSystem/UnixFileSystem.h"
 
 #include "../Interfaces/IMemory.h"
 
-bool CocoaFileSystem::IsCaseSensitive() const {
-#if TARGET_OS_IPHONE
-    return true;
+static bool gInitialized = false;
+static const char* gResourceMounts[RM_COUNT];
+const char* getResourceMount(ResourceMount mount) {
+	return gResourceMounts[mount];
+}
+
+static NSURL* gSaveUrl;
+static NSURL* gDebugUrl;
+static char gApplicationPath[FS_MAX_PATH] = {};
+
+bool initFileSystem(FileSystemInitDesc* pDesc)
+{
+	if (gInitialized)
+	{
+		LOGF(LogLevel::eWARNING, "FileSystem already initialized.");
+		return true;
+	}
+	ASSERT(pDesc);
+	pSystemFileIO->GetResourceMount = getResourceMount;
+
+    NSFileManager* fileManager = [NSFileManager defaultManager];
+	// Get application directory
+	gResourceMounts[RM_CONTENT] = [[[[NSBundle mainBundle] resourceURL] relativePath] UTF8String];
+		
+	if(!pDesc->pResourceMounts[RM_CONTENT])
+	{
+		[fileManager changeCurrentDirectoryPath:[[NSBundle mainBundle] bundlePath]];
+	}
+
+	// Get save directory
+    NSError* error = nil;
+    gSaveUrl = [fileManager URLForDirectory:NSDocumentDirectory inDomain:NSUserDomainMask appropriateForURL:nil create:true error:&error];
+
+    if (!error)
+	{
+		gResourceMounts[RM_SAVE_0] = [[gSaveUrl path] UTF8String];
+    }
+	else
+	{
+		LOGF(LogLevel::eERROR, "Error retrieving user documents directory: %s", [[error description] UTF8String]);
+		return false;
+	}
+
+	// Get debug directory
+#ifdef TARGET_IOS
+	// Place log files in the application support directory on iOS.
+	gDebugUrl = [fileManager URLForDirectory:NSApplicationSupportDirectory inDomain:NSUserDomainMask appropriateForURL:nil create:true error:&error];
+	if (!error)
+	{
+		gResourceMounts[RM_DEBUG] = [[gDebugUrl path] UTF8String];
+	}
+	else
+	{
+		LOGF(LogLevel::eERROR, "Error retrieving application support directory: %s", [[error description] UTF8String]);
+	}
 #else
-    return false;
+	const char* path = [[[NSBundle mainBundle] bundlePath] UTF8String];
+	fsGetParentPath(path, gApplicationPath);
+	gResourceMounts[RM_DEBUG] = gApplicationPath;
 #endif
+
+	// Override Resource mounts
+	for (uint32_t i = 0; i < RM_COUNT; ++i)
+	{
+		if (pDesc->pResourceMounts[i])
+			gResourceMounts[i] = pDesc->pResourceMounts[i];
+	}
+
+	gInitialized = true;
+	return true;
 }
 
-bool CocoaFileSystem::CopyFile(const Path* sourcePath, const Path* destinationPath, bool overwriteIfExists) const {
-    if (this->FileExists(destinationPath)) {
-        if (!overwriteIfExists) {
-            return false;
-        } else {
-            this->DeleteFile(destinationPath);
-        }
-    }
-    
-    NSError *error = nil;
-    NSString *sourcePathString = [NSString stringWithUTF8String:fsGetPathAsNativeString(sourcePath)];
-    NSString *destinationPathString = [NSString stringWithUTF8String:fsGetPathAsNativeString(destinationPath)];
-    
-    bool success = [[NSFileManager defaultManager] copyItemAtPath:sourcePathString toPath:destinationPathString error:&error];
-    
-    if (!success) {
-        LOGF(LogLevel::eWARNING, "Failed to copy file from %s to %s: %s", fsGetPathAsNativeString(sourcePath), fsGetPathAsNativeString(destinationPath), [[error description] UTF8String]);
-    }
-    return success;
-}
-
-void CocoaFileSystem::EnumerateFilesWithExtension(const Path* directory, const char* extension, bool (*processFile)(const Path*, void* userData), void* userData) const {
-    NSURL *pathURL = [NSURL fileURLWithPath:[NSString stringWithUTF8String:fsGetPathAsNativeString(directory)]];
-    NSDirectoryEnumerator<NSURL*>* enumerator = [[NSFileManager defaultManager] enumeratorAtURL:pathURL includingPropertiesForKeys:@[NSURLPathKey] options:0 errorHandler:^BOOL(NSURL * _Nonnull url, NSError * _Nonnull error) {
-        LOGF(LogLevel::eWARNING, "Error enumerating directory at url %s: %s", [[url path] UTF8String], [[error description] UTF8String]);
-        return YES;
-    }];
-    
-    NSString *extensionString = nil;
-    if (extension) {
-        extensionString = [[NSString stringWithUTF8String:extension] lowercaseString];
-    }
-    
-    for (NSURL* url in enumerator) {
-        if (extensionString && ![[url.pathExtension lowercaseString] isEqualToString:extensionString]) {
-            continue;
-        }
-        
-        Path *path = fsCreatePath(this, [url.path UTF8String]);
-        bool shouldContinue = processFile(path, userData);
-        fsFreePath(path);
-        
-        if (!shouldContinue) {
-            break;
-        } 
-    }
-}
-
-void CocoaFileSystem::EnumerateSubDirectories(const Path* directory, bool (*processDirectory)(const Path*, void* userData), void* userData) const {
-    NSURL *pathURL = [NSURL fileURLWithPath:[NSString stringWithUTF8String:fsGetPathAsNativeString(directory)]];
-    NSDirectoryEnumerator<NSURL*>* enumerator = [[NSFileManager defaultManager] enumeratorAtURL:pathURL includingPropertiesForKeys:@[NSURLPathKey, NSURLIsDirectoryKey] options:0 errorHandler:^BOOL(NSURL * _Nonnull url, NSError * _Nonnull error) {
-        LOGF(LogLevel::eWARNING, "Error enumerating directory at url %s: %s", [[url path] UTF8String], [[error description] UTF8String]);
-        return YES;
-    }];
-    
-    for (NSURL* url in enumerator) {
-        NSNumber *isDirectory = nil;
-        [url getResourceValue:&isDirectory forKey:NSURLIsDirectoryKey error:nil];
-        
-        if (![isDirectory boolValue]) {
-            continue;
-        }
-        
-        Path *path = fsCreatePath(this, [url.path UTF8String]);
-        bool shouldContinue = processDirectory(path, userData);
-        fsFreePath(path);
-        
-        if (!shouldContinue) {
-            break;
-        }
-    }
-}
-
-CocoaFileSystem gDefaultFS;
-
-FileSystem* fsGetSystemFileSystem() {
-    return &gDefaultFS;
-}
-
-Path* fsGetApplicationDirectory() {
-#if TARGET_OS_IPHONE
-    NSString *directoryPath = [NSBundle mainBundle].bundlePath;
-#else
-    NSString *directoryPath = [[NSBundle mainBundle].bundleURL URLByDeletingLastPathComponent].path;
-#endif
-    // Go one directory up from the bundleURL
-    return fsCreatePath(fsGetSystemFileSystem(), [directoryPath UTF8String]);
-}
-
-Path* fsGetApplicationPath() {
-    NSString *path = [[NSBundle mainBundle] executablePath];
-    const char *utf8String = [path UTF8String];
-    return fsCreatePath(fsGetSystemFileSystem(), utf8String);
-}
-
-Path* fsCopyPreferencesDirectoryPath(const char* organisation, const char* application) {
-    NSFileManager *fileManager = [NSFileManager defaultManager];
-    
-    NSError *error = nil;
-    NSURL *url = [fileManager URLForDirectory:NSApplicationSupportDirectory inDomain:NSUserDomainMask appropriateForURL:nil create:true error:&error];
-    
-    if (error) {
-        LOGF(LogLevel::eERROR, "Error retrieving user preferences directory: %s", [[error description] UTF8String]);
-        return NULL;
-    }
-    
-    NSURL *fullURL = [url URLByAppendingPathComponent:[NSString stringWithFormat:@"%s/%s", organisation, application]];
-    
-    if (![fileManager fileExistsAtPath:fullURL.path]) {
-        [fileManager createDirectoryAtURL:fullURL withIntermediateDirectories:true attributes:nil error:&error];
-        
-        if (error) {
-            LOGF(LogLevel::eERROR, "Error retrieving user preferences directory: %s", [[error description] UTF8String]);
-            return NULL;
-        }
-    }
-    
-    return fsCreatePath(fsGetSystemFileSystem(), [[fullURL path] UTF8String]);
-}
-
-Path* fsGetUserSpecificPath() {
-    NSFileManager *fileManager = [NSFileManager defaultManager];
-    
-    NSError *error = nil;
-    NSURL *url = [fileManager URLForDirectory:NSDocumentDirectory inDomain:NSUserDomainMask appropriateForURL:nil create:true error:&error];
-    if (error) {
-        LOGF(LogLevel::eERROR, "Error retrieving user documents directory: %s", [[error description] UTF8String]);
-        return NULL;
-    }
-    
-    return fsCreatePath(fsGetSystemFileSystem(), [[url path] UTF8String]);
-}
-
-
-Path* fsGetPreferredLogDirectory() {
-#if TARGET_OS_IPHONE
-    // Place log files in the application support directory on iOS.
-    NSFileManager *fileManager = [NSFileManager defaultManager];
-    
-    NSError *error = nil;
-    NSURL *url = [fileManager URLForDirectory:NSApplicationSupportDirectory inDomain:NSUserDomainMask appropriateForURL:nil create:true error:&error];
-    
-    return fsCreatePath(fsGetSystemFileSystem(), url.path.UTF8String);
-#else
-    return fsGetApplicationDirectory();
-#endif
+void exitFileSystem()
+{
+	gInitialized = false;
 }
