@@ -187,7 +187,6 @@ bool Demo::init(GLFWwindow *pWindow)
 	if (!createSwapchainResources())
 		return false;
 
-
 	//vertex buffer
 	{
 		const eastl::vector<Vertex> vertices =

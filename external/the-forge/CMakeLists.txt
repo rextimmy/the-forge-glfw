@@ -74,6 +74,14 @@ set(FORGE_RMEM
 	${FORGE_DIR}/Common_3/ThirdParty/OpenSource/rmem/src/rmem_lib.cpp
 )
 
+#lua lib
+file(GLOB FORGE_LUA "${FORGE_DIR}/Common_3/ThirdParty/OpenSource/lua-5.3.5/src/*.*")
+#remove luac.c
+list(REMOVE_ITEM FORGE_LUA "${FORGE_DIR}/Common_3/ThirdParty/OpenSource/lua-5.3.5/src/luac.c")
+
+#lua middleware
+file(GLOB FORGE_LUA_MIDDLEWARE "${FORGE_DIR}/Middleware_3/LUA/*.*")
+
 #UI middleware
 set(FORGE_UI 
 	${FORGE_DIR}/Middleware_3/UI/AppUI.h
@@ -110,7 +118,7 @@ set(FORGE_DEFS ${FORGE_DEFS} USE_LOGGING )
 
 set(SOURCE_LIST ${FORGE_OS_INTERFACES} ${FORGE_OS_CORE} ${FORGE_OS_FILESYSTEM} ${FORGE_OS_IMAGE} ${FORGE_OS_LOGGING} ${FORGE_OS_MATH} ${FORGE_OS_MEMORYTRACKING}
 	${FORGE_OS_PROFILER} ${FORGE_RENDERER} ${FORGE_EASTL} ${FORGE_SPIRVTOOLS} ${FORGE_SPIRVCROSS} ${FORGE_BASIS_TRANSCODER} ${FORGE_ZIP} ${FORGE_UI} ${FORGE_TEXT}
-	${FORGE_UI_IMGUI} ${FORGE_RMEM})
+	${FORGE_UI_IMGUI} ${FORGE_RMEM} ${FORGE_LUA} ${FORGE_LUA_MIDDLEWARE})
 
 #add the lib
 add_library(the-forge STATIC ${SOURCE_LIST})
