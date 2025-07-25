@@ -1,3 +1,5 @@
+This repository is no longer maintained and has been archived.
+
 # The-Forge GLFW Demo
 Unofficial simple demo showing how to use The-Forge with a 'bring your own' windowing, input, application loop, maths lib and CMake build system.
 
